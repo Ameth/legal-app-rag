@@ -1,0 +1,5 @@
+Email			Password	Casos
+abogado1@actslaw.com	password123	25092, 25096
+abogado2@actslaw.com	password123	25092
+cliente@example.com	password123	25092
+admin@actslaw.com	admin123	Todos

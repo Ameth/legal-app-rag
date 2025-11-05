@@ -1,0 +1,102 @@
+# ===== ARCHIVOS SENSIBLES =====
+# NUNCA subir archivos con keys reales
+.env
+.env.local
+.env.production
+.env.development
+*.key
+*.pem
+
+*/.env
+*/.env.local
+*/.env.production
+*/.env.development
+
+# ===== NODE MODULES =====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===== BACKEND =====
+backend/.env
+backend/node_modules/
+backend/npm-debug.log*
+backend/yarn-debug.log*
+backend/dist/
+backend/build/
+
+# ===== FRONTEND =====
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+frontend/node_modules/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/dist/
+frontend/build/
+
+# Vite
+frontend/.vite/
+frontend/dist-ssr
+*.local
+
+# ===== EDITOR / IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.log
+
+# ===== BUILD / DIST =====
+dist/
+build/
+out/
+.next/
+.nuxt/
+.cache/
+
+# ===== TESTING =====
+coverage/
+*.coveragerc
+.nyc_output/
+
+# ===== TEMPORALES =====
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# ===== SISTEMA OPERATIVO =====
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ===== OTROS =====
+*.gz
+*.zip
+*.rar
+*.7z
+.env.backup
