@@ -1,0 +1,149 @@
+{
+  "metadata": {
+    "lastSync": "2025-11-12T19:32:34.137Z",
+    "totalUsers": 14,
+    "totalCases": 2,
+    "syncedBy": "sync-permissions.js"
+  },
+  "permissions": {
+    "acohen@actslaw.com": {
+      "name": "Alexander Cohen",
+      "email": "acohen@actslaw.com",
+      "role": "Supervising Partner",
+      "phone": "(310) 666-0699",
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "dabir@actslaw.com": {
+      "name": "Danny Abir",
+      "email": "dabir@actslaw.com",
+      "role": "Managing Partner",
+      "phone": "(424) 288-4367",
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "accountants@actslaw.com": {
+      "name": "Jose Gramajo",
+      "email": "accountants@actslaw.com",
+      "role": "Accountant",
+      "phone": "(424) 288-4367",
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "info@actslaw.com": {
+      "name": "Shared Calendar",
+      "email": "info@actslaw.com",
+      "role": "Calendar",
+      "phone": null,
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "ibf@actslaw.com": {
+      "name": "IBF Calendar",
+      "email": "ibf@actslaw.com",
+      "role": "Legal Assistant",
+      "phone": null,
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "fai@actslaw.com": {
+      "name": "Foundation AI",
+      "email": "fai@actslaw.com",
+      "role": "Staff",
+      "phone": null,
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "ldowney@actslaw.com": {
+      "name": "Lindsey Downey",
+      "email": "ldowney@actslaw.com",
+      "role": "Attorney",
+      "phone": "(424) 288-4367",
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "smarcil@actslaw.com": {
+      "name": "Suzi Marcil",
+      "email": "smarcil@actslaw.com",
+      "role": "Paralegal",
+      "phone": null,
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "mlanger@actslaw.com": {
+      "name": "Michelle Langer",
+      "email": "mlanger@actslaw.com",
+      "role": "Legal Assistant",
+      "phone": null,
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "steichberg@actslaw.com": {
+      "name": "Samuel Teichberg",
+      "email": "steichberg@actslaw.com",
+      "role": "Attorney",
+      "phone": "(424) 288-4367",
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "kpollack@actslaw.com": {
+      "name": "Kevin Pollack",
+      "email": "kpollack@actslaw.com",
+      "role": "Supervising Attorney",
+      "phone": "(424) 288-4367",
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "rjulian@actslaw.com": {
+      "name": "Rhys Julian-Jones",
+      "email": "rjulian@actslaw.com",
+      "role": "Legal Assistant",
+      "phone": "(424) 288-4367",
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "achavarria@actslaw.com": {
+      "name": "Andrea Chavarria",
+      "email": "achavarria@actslaw.com",
+      "role": "Legal Assistant",
+      "phone": "(424) 288-4367",
+      "cases": [
+        "25092",
+        "25096"
+      ]
+    },
+    "apoberezhskiy@actslaw.com": {
+      "name": "Alex Poberezhskiy",
+      "email": "apoberezhskiy@actslaw.com",
+      "role": "Legal Assistant",
+      "phone": "(424) 288-4367",
+      "cases": [
+        "25096"
+      ]
+    }
+  }
+}

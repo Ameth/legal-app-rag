@@ -3,8 +3,6 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import jwt from 'jsonwebtoken'
 import axios from 'axios'
-import fs from 'fs'
-import path from 'path'
 
 dotenv.config()
 
@@ -15,99 +13,35 @@ const PORT = process.env.PORT || 3001
 app.use(cors())
 app.use(express.json())
 
-// ===== PERMISSIONS MANAGEMENT =====
-const PERMISSIONS_FILE = './permissions-cache.json'
-let userPermissions = {}
-let permissionsMetadata = {}
-
-/**
- * Carga los permisos desde el archivo JSON
- */
-function loadPermissions() {
-  try {
-    if (!fs.existsSync(PERMISSIONS_FILE)) {
-      console.warn('⚠️  No se encontró permissions-cache.json. Usando permisos demo.')
-      return loadDemoPermissions()
-    }
-
-    const data = JSON.parse(fs.readFileSync(PERMISSIONS_FILE, 'utf-8'))
-    
-    userPermissions = data.permissions
-    permissionsMetadata = data.metadata
-
-    // Agregar passwords temporales para testing
-    Object.keys(userPermissions).forEach(email => {
-      if (!userPermissions[email].password) {
-        userPermissions[email].password = 'test123'
-      }
-    })
-
-    console.log('\n✅ Permisos cargados exitosamente:')
-    console.log(`   📊 Total usuarios: ${Object.keys(userPermissions).length}`)
-    console.log(`   📁 Total casos: ${permissionsMetadata.totalCases}`)
-    console.log(`   🕐 Última sincronización: ${new Date(permissionsMetadata.lastSync).toLocaleString()}`)
-    console.log(`   🔑 Password temporal para testing: test123`)
-    
-    return true
-  } catch (error) {
-    console.error('❌ Error cargando permisos:', error.message)
-    console.warn('⚠️  Usando permisos demo como respaldo')
-    return loadDemoPermissions()
-  }
+// ===== PERMISSIONS CONFIGURATION =====
+// In production, this would be in a database
+const userPermissions = {
+  'abogado1@actslaw.com': {
+    password: 'password123',
+    cases: ['25092', '25096'],
+    name: 'Attorney 1',
+  },
+  'abogado2@actslaw.com': {
+    password: 'password123',
+    cases: ['25092'],
+    name: 'Attorney 2',
+  },
+  'abogado3@actslaw.com': {
+    password: 'password123',
+    cases: ['25097'],
+    name: 'Attorney 3',
+  },
+  'cliente@example.com': {
+    password: 'password123',
+    cases: ['25092'],
+    name: 'Demo Client',
+  },
+  'admin@actslaw.com': {
+    password: 'admin123',
+    cases: ['*'], // Access to all cases
+    name: 'Administrator',
+  },
 }
-
-/**
- * Permisos demo para desarrollo/pruebas
- */
-function loadDemoPermissions() {
-  userPermissions = {
-    'abogado1@actslaw.com': {
-      password: 'password123',
-      cases: ['25092', '25096'],
-      name: 'Attorney 1',
-    },
-    'abogado2@actslaw.com': {
-      password: 'password123',
-      cases: ['25092'],
-      name: 'Attorney 2',
-    },
-    'abogado3@actslaw.com': {
-      password: 'password123',
-      cases: ['25097'],
-      name: 'Attorney 3',
-    },
-    'cliente@example.com': {
-      password: 'password123',
-      cases: ['25092'],
-      name: 'Demo Client',
-    },
-    'admin@actslaw.com': {
-      password: 'admin123',
-      cases: ['*'], // Access to all cases
-      name: 'Administrator',
-    },
-  }
-  
-  permissionsMetadata = {
-    lastSync: new Date().toISOString(),
-    totalUsers: Object.keys(userPermissions).length,
-    totalCases: 3,
-    mode: 'DEMO'
-  }
-  
-  return false
-}
-
-/**
- * Recarga los permisos desde el archivo (útil para actualizaciones)
- */
-function reloadPermissions() {
-  console.log('\n🔄 Recargando permisos...')
-  loadPermissions()
-}
-
-// Cargar permisos al iniciar
-loadPermissions()
 
 // ===== AZURE CONFIGURATION =====
 const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT
@@ -122,19 +56,27 @@ const AZURE_SEARCH_INDEX = process.env.AZURE_SEARCH_INDEX
 const JWT_SECRET = process.env.JWT_SECRET
 
 // Generate OData filter based on allowed cases
+// NOTA: Como parent_id no es "searchable" en Azure Search, no podemos filtrar allí
+// En su lugar, vamos a recuperar más resultados y filtrar en el backend
 function generateFilter(cases) {
   if (cases.includes('*')) {
     return null // No filter - full access
   }
+
+  // ESTRATEGIA TEMPORAL: No usar filtro de Azure Search
+  // Dejar que Azure devuelva resultados y filtraremos en el backend
+  // Esto no es lo más eficiente, pero funciona sin modificar el índice
   return null
 }
 
-// Función auxiliar para verificar acceso a un documento
+// Función auxiliar para verificar acceso a un documento (seguridad adicional)
 function hasAccessToDocument(parentId, allowedCases) {
   if (allowedCases.includes('*')) return true
 
   try {
+    // Decodificar el Base64 del parent_id
     const decodedPath = Buffer.from(parentId, 'base64').toString('utf-8')
+    // Verificar si algún caso permitido está en la ruta
     return allowedCases.some((caseNum) => decodedPath.includes(`/${caseNum}/`))
   } catch (error) {
     console.error('Error decoding parent_id:', error)
@@ -143,11 +85,14 @@ function hasAccessToDocument(parentId, allowedCases) {
 }
 
 // ===== CLASSIFICATION FUNCTION =====
+// Determines if the question needs RAG search or can be answered from conversation context
 async function needsRAGSearch(message, conversationHistory) {
+  // If there's no conversation history, definitely needs RAG
   if (conversationHistory.length === 0) {
     return true
   }
 
+  // Quick heuristic checks for obvious follow-up questions
   const followUpPatterns = [
     /^(traduce|translate|traduci)/i,
     /^(resume|summarize|resumen|summary)/i,
@@ -163,6 +108,7 @@ async function needsRAGSearch(message, conversationHistory) {
     /^(dame un ejemplo|give me an example)/i,
   ]
 
+  // Check if it matches any follow-up pattern
   const isObviousFollowUp = followUpPatterns.some((pattern) =>
     pattern.test(message.trim())
   )
@@ -174,13 +120,14 @@ async function needsRAGSearch(message, conversationHistory) {
     return false
   }
 
+  // For ambiguous cases, use LLM to classify
   console.log('   🤔 Analyzing if RAG search is needed...')
 
   const classificationPrompt = `You are a classifier that determines if a user question requires searching a document database (RAG) or can be answered using only the conversation history.
 
 CONVERSATION HISTORY:
 ${conversationHistory
-  .slice(-6)
+  .slice(-6) // Last 6 messages for context
   .map((msg) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
   .join('\n')}
 
@@ -230,7 +177,7 @@ Respond with ONLY ONE WORD:
     return needsRAG
   } catch (error) {
     console.error('   ⚠️  Classification error, defaulting to RAG search')
-    return true
+    return true // Default to RAG if classification fails
   }
 }
 
@@ -239,27 +186,17 @@ Respond with ONLY ONE WORD:
 // Login
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body
-  const normalizedEmail = email.toLowerCase().trim()
 
-  const user = userPermissions[normalizedEmail]
+  const user = userPermissions[email]
 
-  if (!user) {
-    return res.status(401).json({ error: 'Invalid credentials' })
-  }
-
-  // Si el usuario viene del sistema real (no tiene password), permitir login
-  // En producción, aquí deberías validar contra tu sistema de autenticación real
-  const isRealUser = !user.password
-  const isDemoUser = user.password && user.password === password
-
-  if (!isRealUser && !isDemoUser) {
+  if (!user || user.password !== password) {
     return res.status(401).json({ error: 'Invalid credentials' })
   }
 
   // Generate JWT
   const token = jwt.sign(
     {
-      email: normalizedEmail,
+      email,
       name: user.name,
       cases: user.cases,
     },
@@ -270,7 +207,7 @@ app.post('/api/login', (req, res) => {
   res.json({
     token,
     user: {
-      email: normalizedEmail,
+      email,
       name: user.name,
       cases: user.cases,
     },
@@ -316,6 +253,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     const requiresRAG = await needsRAGSearch(message, conversationHistory)
 
     if (!requiresRAG) {
+      // Answer using only conversation context (no RAG)
       console.log('💬 Answering from conversation context only (NO RAG)\n')
 
       const conversationMessages = [
@@ -337,6 +275,7 @@ IMPORTANT RULES:
         },
       ]
 
+      // Add conversation history
       const recentHistory = conversationHistory
         .filter((msg) => msg.role !== 'error')
         .slice(-10)
@@ -346,6 +285,8 @@ IMPORTANT RULES:
         }))
 
       conversationMessages.push(...recentHistory)
+
+      // Add new user message
       conversationMessages.push({
         role: 'user',
         content: message,
@@ -375,10 +316,11 @@ IMPORTANT RULES:
 
       return res.json({
         message: assistantMessage,
-        citations: [],
+        citations: [], // No citations since we didn't search documents
       })
     }
 
+    // If RAG is needed, continue with normal RAG flow
     console.log('🔍 RAG search required, proceeding with document search\n')
 
     // PASO 1: Generar embedding de la pregunta
@@ -403,7 +345,7 @@ IMPORTANT RULES:
     const searchResponse = await axios.post(
       `${AZURE_SEARCH_ENDPOINT}/indexes/${AZURE_SEARCH_INDEX}/docs/search?api-version=2023-11-01`,
       {
-        search: message,
+        search: message, // Búsqueda de texto completo
         vectorQueries: [
           {
             kind: 'vector',
@@ -429,13 +371,16 @@ IMPORTANT RULES:
     // PASO 3: Filtrar por casos permitidos usando parent_id
     console.log('🔒 Step 3: Filtering by allowed cases...')
     const filteredResults = allResults.filter((doc) => {
+      // Si es admin, tiene acceso a todo
       if (userCases.includes('*')) return true
 
       try {
+        // Decodificar parent_id
         const decodedPath = Buffer.from(doc.parent_id, 'base64').toString(
           'utf-8'
         )
 
+        // Verificar si algún caso permitido está en la ruta
         const hasAccess = userCases.some((caseNum) =>
           decodedPath.includes(`/${caseNum}/`)
         )
@@ -457,6 +402,7 @@ IMPORTANT RULES:
       `   Filtered: ${filteredResults.length} / ${allResults.length} documents`
     )
 
+    // If no results after filtering
     if (filteredResults.length === 0) {
       console.log('⚠️  No documents found after filtering\n')
       return res.json({
@@ -468,7 +414,7 @@ IMPORTANT RULES:
     // PASO 4: Preparar contexto para el LLM
     console.log('🤖 Step 4: Preparing context for LLM...')
     const context = filteredResults
-      .slice(0, 15)
+      .slice(0, 15) // Top 15 más relevantes
       .map((doc, idx) => {
         const decodedPath = Buffer.from(doc.parent_id, 'base64').toString(
           'utf-8'
@@ -482,6 +428,7 @@ IMPORTANT RULES:
     // PASO 5: Llamar a Azure OpenAI con el historial del contexto
     console.log('💬 Step 5: Calling Azure OpenAI with conversation history...')
 
+    // Construir mensajes con historial
     const conversationMessages = [
       {
         role: 'system',
@@ -500,15 +447,18 @@ ${context}`,
       },
     ]
 
+    // Agregar historial de conversación (últimos 10 mensajes para no exceder tokens)
     const recentHistory = conversationHistory
-      .filter((msg) => msg.role !== 'error')
-      .slice(-10)
+      .filter((msg) => msg.role !== 'error') // Excluir mensajes de error
+      .slice(-10) // Solo últimos 10 mensajes
       .map((msg) => ({
         role: msg.role === 'assistant' ? 'assistant' : 'user',
         content: msg.content,
       }))
 
     conversationMessages.push(...recentHistory)
+
+    // Agregar el nuevo mensaje del usuario
     conversationMessages.push({
       role: 'user',
       content: message,
@@ -517,7 +467,7 @@ ${context}`,
     const completionResponse = await axios.post(
       `${AZURE_OPENAI_ENDPOINT}/openai/deployments/${AZURE_OPENAI_DEPLOYMENT}/chat/completions?api-version=2024-08-01-preview`,
       {
-        messages: conversationMessages,
+        messages: conversationMessages, // ← ENVIAR HISTORIAL COMPLETO
         max_tokens: 1500,
         temperature: 0.1,
       },
@@ -578,52 +528,11 @@ app.get('/api/me', authenticateToken, (req, res) => {
   })
 })
 
-// Endpoint to reload permissions (útil para actualizar sin reiniciar servidor)
-app.post('/api/admin/reload-permissions', authenticateToken, (req, res) => {
-  // Verificar que sea admin
-  if (!req.user.cases.includes('*')) {
-    return res.status(403).json({ error: 'Admin access required' })
-  }
-
-  reloadPermissions()
-  
-  res.json({
-    message: 'Permissions reloaded successfully',
-    metadata: permissionsMetadata,
-    totalUsers: Object.keys(userPermissions).length
-  })
-})
-
-// Endpoint para ver información de permisos
-app.get('/api/admin/permissions-info', authenticateToken, (req, res) => {
-  if (!req.user.cases.includes('*')) {
-    return res.status(403).json({ error: 'Admin access required' })
-  }
-
-  res.json({
-    metadata: permissionsMetadata,
-    totalUsers: Object.keys(userPermissions).length,
-    users: Object.entries(userPermissions).map(([email, data]) => ({
-      email,
-      name: data.name,
-      role: data.role,
-      casesCount: data.cases.length,
-      cases: data.cases
-    }))
-  })
-})
-
 // Health check
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    permissions: {
-      loaded: Object.keys(userPermissions).length > 0,
-      totalUsers: Object.keys(userPermissions).length,
-      lastSync: permissionsMetadata.lastSync,
-      mode: permissionsMetadata.mode || 'PRODUCTION'
-    },
     config: {
       azureEndpoint: AZURE_OPENAI_ENDPOINT,
       searchEndpoint: AZURE_SEARCH_ENDPOINT,
@@ -643,7 +552,5 @@ app.listen(PORT, () => {
   console.log(`🤖 OpenAI Deployment: ${AZURE_OPENAI_DEPLOYMENT}`)
   console.log(`🔤 Embedding Deployment: ${AZURE_EMBEDDING_DEPLOYMENT}`)
   console.log(`⚡ Smart RAG Classification: ENABLED`)
-  console.log(`🔐 Permissions Mode: ${permissionsMetadata.mode || 'PRODUCTION'}`)
-  console.log(`👥 Loaded Users: ${Object.keys(userPermissions).length}`)
   console.log(`${'='.repeat(60)}\n`)
 })

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import ThemeToggle from './ThemeToggle'
+import { useExportChat } from '../hooks/useExportChat'
 
 function Chat({ user, onLogout, theme, toggleTheme }) {
   const [messages, setMessages] = useState([])
@@ -8,6 +9,16 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
   const [loading, setLoading] = useState(false)
   const [showAllCitations, setShowAllCitations] = useState(false)
   const messagesEndRef = useRef(null)
+  const exportDropdownRef = useRef(null)
+
+  // Custom hook para exportar chat
+  const {
+    showExportDropdown,
+    setShowExportDropdown,
+    exportAsMarkdown,
+    exportAsPlainText,
+    hasValidMessages,
+  } = useExportChat(messages, user)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -16,6 +27,21 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (
+        exportDropdownRef.current &&
+        !exportDropdownRef.current.contains(event.target)
+      ) {
+        setShowExportDropdown(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [setShowExportDropdown])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -45,7 +71,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
         },
         body: JSON.stringify({
           message: userMessage,
-          conversationHistory: newMessages
+          conversationHistory: newMessages,
         }),
       })
 
@@ -181,6 +207,35 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
           </div>
           <div className='flex gap-3 items-center'>
             <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
+
+            {/* Export Button with Dropdown */}
+            <div className='relative' ref={exportDropdownRef}>
+              <button
+                onClick={() => setShowExportDropdown(!showExportDropdown)}
+                disabled={!hasValidMessages()}
+                className='px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+              >
+                📥 Export Chat
+              </button>
+
+              {showExportDropdown && (
+                <div className='absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700 z-10'>
+                  <button
+                    onClick={exportAsMarkdown}
+                    className='w-full text-left px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors rounded-t-md'
+                  >
+                    📝 Markdown (.md)
+                  </button>
+                  <button
+                    onClick={exportAsPlainText}
+                    className='w-full text-left px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors rounded-b-md'
+                  >
+                    📄 Plain Text (.txt)
+                  </button>
+                </div>
+              )}
+            </div>
+
             <button
               onClick={clearChat}
               className='px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors'
