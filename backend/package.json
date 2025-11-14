@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "sync": "node sync-permissions.js",
+    "sync-notes": "node sync-notes.js",
+    "sync-permissions": "node sync-permissions.js",
+    "sync-all": "npm run sync-permissions && npm run sync-notes",
     "validate": "node validate-config.js",
     "schedule": "node schedule-sync.js",
     "test:connection": "node validate-config.js",

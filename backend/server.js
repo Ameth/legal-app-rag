@@ -121,6 +121,53 @@ const AZURE_SEARCH_INDEX = process.env.AZURE_SEARCH_INDEX
 // ===== UTILITIES =====
 const JWT_SECRET = process.env.JWT_SECRET
 
+/**
+ * Expande fechas en múltiples formatos para mejorar búsqueda
+ * "September 17, 2025" → ["September 17", "09/17/2025", "2025-09-17", "20250917", "Sept 17"]
+ */
+function expandDateFormats(query) {
+  // Detectar fechas en formato "Month Day, Year" o "Month Day Year"
+  const monthNames = {
+    january: '01', february: '02', march: '03', april: '04',
+    may: '05', june: '06', july: '07', august: '08',
+    september: '09', october: '10', november: '11', december: '12',
+    jan: '01', feb: '02', mar: '03', apr: '04',
+    jun: '06', jul: '07', aug: '08', sep: '09', sept: '09',
+    oct: '10', nov: '11', dec: '12'
+  }
+  
+  const datePattern = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})[,\s]+(\d{4})\b/gi
+  
+  let expandedQuery = query
+  const matches = [...query.matchAll(datePattern)]
+  
+  if (matches.length > 0) {
+    const dateFormats = []
+    
+    matches.forEach(match => {
+      const month = match[1].toLowerCase()
+      const day = match[2].padStart(2, '0')
+      const year = match[3]
+      const monthNum = monthNames[month]
+      
+      if (monthNum) {
+        // Agregar múltiples formatos
+        dateFormats.push(`${monthNum}/${day}/${year}`)      // 09/17/2025
+        dateFormats.push(`${year}-${monthNum}-${day}`)      // 2025-09-17
+        dateFormats.push(`${year}${monthNum}${day}`)        // 20250917
+        dateFormats.push(`${match[1]} ${day}`)              // September 17
+      }
+    })
+    
+    // Agregar todos los formatos a la query
+    if (dateFormats.length > 0) {
+      expandedQuery = `${query} ${dateFormats.join(' ')}`
+    }
+  }
+  
+  return expandedQuery
+}
+
 // Generate OData filter based on allowed cases
 function generateFilter(cases) {
   if (cases.includes('*')) {
@@ -148,19 +195,20 @@ async function needsRAGSearch(message, conversationHistory) {
     return true
   }
 
+  // Patrones que SOLO aplican cuando se refieren explícitamente a la respuesta anterior
   const followUpPatterns = [
-    /^(traduce|translate|traduci)/i,
-    /^(resume|summarize|resumen|summary)/i,
-    /^(explica|explain|explicame|explícame)/i,
-    /^(más corto|shorter|más breve|briefly)/i,
-    /^(en español|in english|en inglés)/i,
-    /^(qué significa|what does.*mean|what is that)/i,
-    /^(eso|that|esto|this)/i,
-    /^(lo anterior|the previous|la respuesta anterior)/i,
-    /^(dime más|tell me more|elabora|elaborate)/i,
-    /^(simplifica|simplify|más simple)/i,
-    /^(reformula|rephrase|di lo mismo)/i,
-    /^(dame un ejemplo|give me an example)/i,
+    /^(translate|traduci?)(r)?\s+(that|this|it|eso|esto|lo anterior)/i,
+    /^(summarize|resume|resumen)\s+(that|this|it|what you (just )?said|your (previous )?answer|eso|esto|lo anterior)/i,
+    /^(explain|explica(me)?)\s+(that|this|it|what you (just )?said|eso|esto|lo anterior)/i,
+    /^(make it |more |más )(shorter|brief|concise|corto|breve)/i,
+    /^(say (it|that) in|di(lo|me) en|en)\s+(spanish|english|español|inglés)/i,
+    /^(what does (that|it|this) mean|qué significa (eso|esto))/i,
+    /^(that|this|it|eso|esto)$/i,
+    /^(the previous|what you (just )?said|your (last |previous )?answer|lo anterior|la respuesta anterior)/i,
+    /^(tell me more|dime más|elabora(te)?|expand on (that|it|this))/i,
+    /^(simplify|simplifica|make it simpler)/i,
+    /^(rephrase|reformula|say (it|that) (differently|again))/i,
+    /^(give me an example|dame un ejemplo)$/i,
   ]
 
   const isObviousFollowUp = followUpPatterns.some((pattern) =>
@@ -186,14 +234,23 @@ ${conversationHistory
 
 NEW USER QUESTION: "${message}"
 
-Analyze if this question:
-- References previous responses (summaries, clarifications) → NO RAG NEEDED
-- Asks for new information about legal documents/cases → RAG NEEDED
-- Is a follow-up question about previous answer → NO RAG NEEDED
-- Asks about specific people, dates, or facts not in conversation → RAG NEEDED
+CRITICAL ANALYSIS RULES:
+1. If the question mentions SPECIFIC information (case numbers, dates, note IDs, document names, people's names, specific events) → RAG NEEDED
+2. If the question asks for a "summary" or "overview" of NEW information not yet discussed → RAG NEEDED
+3. If the question only asks to modify/reformat/translate the PREVIOUS assistant response → NO RAG
+4. If the question uses pronouns like "that", "it", "this" referring to previous answer → NO RAG
+5. If conversation history is empty or doesn't contain relevant information → RAG NEEDED
+
+EXAMPLES:
+- "Give me a summary of the Zoom meeting from September 17th" → RAG (specific new info)
+- "Summarize what you just told me" → NO RAG (referring to previous response)
+- "What happened in case 25096?" → RAG (specific case)
+- "Translate that to Spanish" → NO RAG (referring to previous response)
+- "What are the notes about Jeff Hughes?" → RAG (specific person, new info)
+- "Explain it more simply" → NO RAG (referring to previous response)
 
 Respond with ONLY ONE WORD:
-- "RAG" if it needs to search documents
+- "RAG" if it needs to search documents for NEW information
 - "CONTEXT" if it can be answered from conversation history`
 
   try {
@@ -381,12 +438,20 @@ IMPORTANT RULES:
 
     console.log('🔍 RAG search required, proceeding with document search\n')
 
-    // PASO 1: Generar embedding de la pregunta
+    // Expandir query con múltiples formatos de fecha
+    const expandedQuery = expandDateFormats(message)
+    if (expandedQuery !== message) {
+      console.log(`📅 Date formats expanded in query`)
+      console.log(`   Original: ${message}`)
+      console.log(`   Expanded: ${expandedQuery}`)
+    }
+
+    // PASO 1: Generar embedding de la pregunta (con query expandida)
     console.log('📊 Step 1: Generating embedding...')
     const embeddingResponse = await axios.post(
       `${AZURE_OPENAI_ENDPOINT}/openai/deployments/${AZURE_EMBEDDING_DEPLOYMENT}/embeddings?api-version=2023-05-15`,
       {
-        input: message,
+        input: expandedQuery,
       },
       {
         headers: {
@@ -398,22 +463,22 @@ IMPORTANT RULES:
 
     const queryEmbedding = embeddingResponse.data.data[0].embedding
 
-    // PASO 2: Buscar en Azure Search con vector similarity
+    // PASO 2: Buscar en Azure Search con vector similarity (más resultados para mejor filtrado)
     console.log('🔎 Step 2: Searching Azure Search (hybrid)...')
     const searchResponse = await axios.post(
       `${AZURE_SEARCH_ENDPOINT}/indexes/${AZURE_SEARCH_INDEX}/docs/search?api-version=2023-11-01`,
       {
-        search: message,
+        search: expandedQuery,
         vectorQueries: [
           {
             kind: 'vector',
             vector: queryEmbedding,
             fields: 'text_vector',
-            k: 50,
+            k: 100, // Aumentado de 50 a 100 para encontrar más candidatos
           },
         ],
         select: 'chunk_id,parent_id,chunk,title',
-        top: 50,
+        top: 100, // Aumentado de 50 a 100
       },
       {
         headers: {
@@ -465,10 +530,10 @@ IMPORTANT RULES:
       })
     }
 
-    // PASO 4: Preparar contexto para el LLM
+    // PASO 4: Preparar contexto para el LLM (más documentos para mejor cobertura)
     console.log('🤖 Step 4: Preparing context for LLM...')
     const context = filteredResults
-      .slice(0, 15)
+      .slice(0, 30) // Aumentado de 15 a 30 para mejor cobertura
       .map((doc, idx) => {
         const decodedPath = Buffer.from(doc.parent_id, 'base64').toString(
           'utf-8'
@@ -485,17 +550,53 @@ IMPORTANT RULES:
     const conversationMessages = [
       {
         role: 'system',
-        content: `You are a specialized legal assistant for ACTS Law firm. Answer questions based ONLY on the provided documents below. 
+        content: `You are an intelligent legal assistant for ACTS Law firm. Answer questions based on the provided documents and conversation context.
 
-IMPORTANT RULES:
-- Only use information from the documents provided
-- Maintain conversation context from previous messages
-- If you cannot find specific information, clearly state it
-- Be professional, precise, and helpful
-- Cite document numbers when referencing information
-- For follow-up questions (like "translate that" or "tell me more"), refer to the previous conversation
+CRITICAL INSTRUCTIONS:
 
-AVAILABLE DOCUMENTS:
+1. **DATE FLEXIBILITY - EXTREMELY IMPORTANT:**
+   - Understand that dates can be written in MANY formats:
+     * "September 17, 2025" = "09/17/2025" = "2025-09-17" = "20250917" = "Sept 17, 2025"
+     * "Date: 09/17/2025 15:04:00" means September 17, 2025 at 3:04 PM
+   - When user asks for "September 17", search for ANY date format that matches
+   - Don't say "no information" if you see a different date format - MATCH THE DATE
+
+2. **ALWAYS BE SPECIFIC AND HELPFUL:**
+   - When user asks vague questions, ask for clarification (e.g., "Which case?")
+   - If information IS FOUND, provide detailed, helpful responses
+   - Include relevant details like dates, names, note IDs, and case numbers
+
+3. **UNDERSTAND USER INTENT:**
+   - "Give me a summary of the Zoom meeting from [date]" → Search notes/documents from that date
+   - "What are the notes about [topic]?" → Search all notes about that topic
+   - "Tell me about case [number]" → Provide comprehensive information
+   - If user mentions dates, names, or events → they want NEW information from documents
+
+4. **PRIORITIZE CASE NOTES:**
+   - Notes from the /notes/ folder contain important meeting summaries, calls, expert opinions
+   - Look for keywords like "Zoom meeting", "meeting with", "deposition", etc.
+   - Notes have metadata: Note ID, Date, Author, Note Type, Subject
+
+5. **HANDLE AMBIGUOUS QUESTIONS:**
+   - If case number missing: "Which case? (e.g., 25092, 25096)"
+   - If date/time vague: "Could you provide more details?"
+   - If topic broad: "I found several items. Would you like info about [list options]?"
+
+6. **DOCUMENT TYPES TO SEARCH:**
+   - Legal documents (PDFs, contracts, filings)
+   - Case notes (meetings, calls, emails, expert opinions from /notes/)
+   - Both are equally important
+
+7. **CITATIONS AND SOURCES:**
+   - Always cite document numbers and sources
+   - For notes: mention Note ID, date, and author when available
+   - For documents: mention document name and case number
+
+8. **CONVERSATION CONTEXT:**
+   - Use previous conversation for context but prioritize NEW documents
+   - Don't confuse "summarize the meeting" (new info) with "summarize what you said" (old info)
+
+AVAILABLE DOCUMENTS (${filteredResults.length} total):
 ${context}`,
       },
     ]
@@ -531,8 +632,8 @@ ${context}`,
 
     const assistantMessage = completionResponse.data.choices[0].message.content
 
-    // PASO 6: Preparar citations para el frontend
-    const citations = filteredResults.slice(0, 15).map((doc) => {
+    // PASO 6: Preparar citations para el frontend (más referencias)
+    const citations = filteredResults.slice(0, 30).map((doc) => {
       try {
         const decodedPath = Buffer.from(doc.parent_id, 'base64').toString(
           'utf-8'

@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import ThemeToggle from './ThemeToggle'
+import { FaSignInAlt } from "react-icons/fa";
 
 function Login({ onLogin, theme, toggleTheme }) {
   const [email, setEmail] = useState('')
@@ -127,9 +128,9 @@ function Login({ onLogin, theme, toggleTheme }) {
             <button
               type='submit'
               disabled={loading}
-              className='w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:bg-blue-300 dark:disabled:bg-blue-800 disabled:cursor-not-allowed transition-colors font-medium'
+              className='w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:bg-blue-300 dark:disabled:bg-blue-800 disabled:cursor-not-allowed transition-colors font-medium flex items-center justify-center gap-2'
             >
-              {loading ? 'Signing in...' : 'Sign In'}
+              {loading ? 'Signing in...' : 'Sign In'} <FaSignInAlt />
             </button>
           </form>
 

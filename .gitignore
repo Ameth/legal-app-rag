@@ -26,6 +26,7 @@ backend/npm-debug.log*
 backend/yarn-debug.log*
 backend/dist/
 backend/build/
+backend/notes-cache.json
 
 # ===== FRONTEND =====
 frontend/.env

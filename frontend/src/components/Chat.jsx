@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import ThemeToggle from './ThemeToggle'
+import { IoIosLogOut } from 'react-icons/io'
+import { GrClear } from 'react-icons/gr'
+import { PiExport } from 'react-icons/pi'
 import { useExportChat } from '../hooks/useExportChat'
 
 function Chat({ user, onLogout, theme, toggleTheme }) {
@@ -213,9 +216,9 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
               <button
                 onClick={() => setShowExportDropdown(!showExportDropdown)}
                 disabled={!hasValidMessages()}
-                className='px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
+                className='px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2'
               >
-                📥 Export Chat
+                Export Chat <PiExport />
               </button>
 
               {showExportDropdown && (
@@ -238,15 +241,16 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
 
             <button
               onClick={clearChat}
-              className='px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors'
+              className='px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors flex items-center gap-2'
             >
-              Clear Chat
+              Clear Chat <GrClear />
             </button>
             <button
               onClick={onLogout}
-              className='px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors'
+              className='px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors flex items-center gap-2'
             >
               Sign Out
+              <IoIosLogOut />
             </button>
           </div>
         </div>
