@@ -1,0 +1,45 @@
+/* Animación para el preview panel */
+@keyframes slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.3s ease-out;
+}
+
+/* Estilos adicionales para el preview panel */
+.document-preview-panel {
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Estilo para scrollbars en el preview */
+.document-preview-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.document-preview-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.document-preview-panel::-webkit-scrollbar-thumb {
+  background-color: rgba(156, 163, 175, 0.5);
+  border-radius: 4px;
+}
+
+.document-preview-panel::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(107, 114, 128, 0.7);
+}
+
+/* Dark mode scrollbar */
+.dark .document-preview-panel::-webkit-scrollbar-thumb {
+  background-color: rgba(75, 85, 99, 0.5);
+}
+
+.dark .document-preview-panel::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(107, 114, 128, 0.7);
+}

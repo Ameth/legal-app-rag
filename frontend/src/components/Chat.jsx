@@ -5,6 +5,7 @@ import { IoIosLogOut } from 'react-icons/io'
 import { GrClear } from 'react-icons/gr'
 import { PiExport } from 'react-icons/pi'
 import { useExportChat } from '../hooks/useExportChat'
+import DocumentPreviewPanel from './DocumentPreviewPanel'
 
 function Chat({ user, onLogout, theme, toggleTheme }) {
   const [messages, setMessages] = useState([])
@@ -13,6 +14,10 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
   const [showAllCitations, setShowAllCitations] = useState(false)
   const messagesEndRef = useRef(null)
   const exportDropdownRef = useRef(null)
+
+  // Estados para el preview panel
+  const [selectedDocument, setSelectedDocument] = useState(null)
+  const [previewPanelOpen, setPreviewPanelOpen] = useState(false)
 
   // Custom hook para exportar chat
   const {
@@ -54,14 +59,13 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
     setInput('')
 
     // Agregar mensaje del usuario
-    const newMessages = [
-      ...messages,
+    setMessages((prev) => [
+      ...prev,
       {
         role: 'user',
         content: userMessage,
       },
-    ]
-    setMessages(newMessages)
+    ])
     setLoading(true)
 
     try {
@@ -74,7 +78,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
         },
         body: JSON.stringify({
           message: userMessage,
-          conversationHistory: newMessages,
+          clearThread: false, // No limpiar thread en cada mensaje
         }),
       })
 
@@ -86,7 +90,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
           {
             role: 'assistant',
             content: data.message,
-            citations: data.citations,
+            citations: data.citations || [],
           },
         ])
       } else {
@@ -111,8 +115,27 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
     }
   }
 
-  const clearChat = () => {
-    setMessages([])
+  const clearChat = async () => {
+    try {
+      const token = localStorage.getItem('token')
+
+      // Llamar al endpoint para eliminar el thread en el backend
+      await fetch('/api/chat/clear', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      })
+
+      // Limpiar mensajes en el frontend
+      setMessages([])
+      console.log('✅ Chat cleared and thread deleted')
+    } catch (error) {
+      console.error('Error clearing chat:', error)
+      // Limpiar mensajes de todos modos
+      setMessages([])
+    }
   }
 
   const CustomLink = (props) => {
@@ -242,6 +265,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
             <button
               onClick={clearChat}
               className='px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors flex items-center gap-2'
+              title='Clear chat and create new conversation thread'
             >
               Clear Chat <GrClear />
             </button>
@@ -261,11 +285,14 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
         <div className='max-w-5xl mx-auto space-y-6'>
           {messages.length === 0 ? (
             <div className='text-center py-12'>
-              <div className='text-6xl mb-4'>💬</div>
+              <div className='text-6xl mb-4'>🤖</div>
               <h2 className='text-2xl font-semibold text-gray-700 dark:text-gray-300 mb-2'>
                 Welcome to the Legal Assistant
               </h2>
-              <p className='text-gray-600 dark:text-gray-400 mb-6'>
+              <p className='text-gray-600 dark:text-gray-400 mb-2'>
+                Powered by Azure AI Foundry Agent
+              </p>
+              <p className='text-sm text-gray-500 dark:text-gray-500 mb-6'>
                 Ask a question about the case documents
               </p>
               <div className='grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl mx-auto'>
@@ -306,7 +333,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
                     <div className='flex items-center gap-2 mb-2 pb-2 border-b border-gray-200 dark:border-gray-700'>
                       <span className='text-xl'>🤖</span>
                       <span className='font-semibold text-sm'>
-                        Legal Assistant
+                        Legal Assistant (Agent)
                       </span>
                     </div>
                   )}
@@ -333,16 +360,27 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
                           .map((citation, i) => (
                             <div
                               key={i}
-                              className='text-xs bg-gray-50 dark:bg-gray-700/50 p-2 rounded'
+                              className='text-xs bg-gray-50 dark:bg-gray-700/50 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-600/50 transition-colors cursor-pointer'
+                              onClick={() => {
+                                // console.log('📎 Citation clicked:', citation)
+                                setSelectedDocument(citation)
+                                setPreviewPanelOpen(true)
+                              }}
+                              title='Click to preview document'
                             >
-                              <div className='font-medium text-gray-900 dark:text-gray-100'>
+                              <div className='font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2'>
+                                <span className='text-blue-600 dark:text-blue-400'>
+                                  🔗
+                                </span>
                                 {i + 1}. {citation.title}
                               </div>
-                              {citation.filepath && (
-                                <div className='text-gray-500 dark:text-gray-400 mt-1 font-mono text-[10px] break-all overflow-hidden'>
-                                  📁 {citation.filepath}
-                                </div>
-                              )}
+                              {/* {citation.filepath &&
+                                citation.filepath !== citation.title &&
+                                citation.filepath !== 'doc_0' && (
+                                  <div className='text-gray-500 dark:text-gray-400 mt-1 font-mono text-[10px] break-all overflow-hidden'>
+                                    📁 {citation.filepath}
+                                  </div>
+                                )} */}
                             </div>
                           ))}
                         {msg.citations.length > 5 && (
@@ -371,9 +409,9 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
             <div className='flex justify-start'>
               <div className='bg-white dark:bg-gray-800 rounded-lg px-4 py-3 shadow-sm border border-gray-200 dark:border-gray-700'>
                 <div className='flex items-center gap-2'>
-                  <div className='animate-pulse text-2xl'>💭</div>
+                  <div className='animate-pulse text-2xl'>🤖</div>
                   <span className='text-gray-600 dark:text-gray-400'>
-                    Thinking...
+                    Agent is thinking...
                   </span>
                 </div>
               </div>
@@ -409,6 +447,18 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
           </p>
         </form>
       </div>
+
+      {/* Document Preview Panel */}
+      {previewPanelOpen && (
+        <DocumentPreviewPanel
+          document={selectedDocument}
+          onClose={() => {
+            setPreviewPanelOpen(false)
+            setSelectedDocument(null)
+          }}
+          token={localStorage.getItem('token')}
+        />
+      )}
     </div>
   )
 }
