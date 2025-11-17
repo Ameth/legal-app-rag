@@ -27,9 +27,6 @@ const PERMISSIONS_FILE = './permissions-cache.json'
 let userPermissions = {}
 let permissionsMetadata = {}
 
-/**
- * Carga los permisos desde el archivo JSON
- */
 function loadPermissions() {
   try {
     if (!fs.existsSync(PERMISSIONS_FILE)) {
@@ -40,11 +37,9 @@ function loadPermissions() {
     }
 
     const data = JSON.parse(fs.readFileSync(PERMISSIONS_FILE, 'utf-8'))
-
     userPermissions = data.permissions
     permissionsMetadata = data.metadata
 
-    // Agregar passwords temporales para testing
     Object.keys(userPermissions).forEach((email) => {
       if (!userPermissions[email].password) {
         userPermissions[email].password = 'test123'
@@ -59,19 +54,14 @@ function loadPermissions() {
         permissionsMetadata.lastSync
       ).toLocaleString()}`
     )
-    console.log(`   🔑 Password temporal para testing: test123`)
 
     return true
   } catch (error) {
     console.error('❌ Error cargando permisos:', error.message)
-    console.warn('⚠️  Usando permisos demo como respaldo')
     return loadDemoPermissions()
   }
 }
 
-/**
- * Permisos demo para desarrollo/pruebas
- */
 function loadDemoPermissions() {
   userPermissions = {
     'abogado1@actslaw.com': {
@@ -89,14 +79,9 @@ function loadDemoPermissions() {
       cases: ['25097'],
       name: 'Attorney 3',
     },
-    'cliente@example.com': {
-      password: 'password123',
-      cases: ['25092'],
-      name: 'Demo Client',
-    },
     'admin@actslaw.com': {
       password: 'admin123',
-      cases: ['*'], // Access to all cases
+      cases: ['*'],
       name: 'Administrator',
     },
   }
@@ -111,15 +96,11 @@ function loadDemoPermissions() {
   return false
 }
 
-/**
- * Recarga los permisos desde el archivo (útil para actualizaciones)
- */
 function reloadPermissions() {
   console.log('\n🔄 Recargando permisos...')
   loadPermissions()
 }
 
-// Cargar permisos al iniciar
 loadPermissions()
 
 // ===== AZURE AI FOUNDRY CONFIGURATION =====
@@ -127,19 +108,15 @@ const AZURE_AI_PROJECT_ENDPOINT = process.env.AZURE_AI_PROJECT_ENDPOINT
 const AZURE_AGENT_ID = process.env.AZURE_AGENT_ID
 const AZURE_AI_PROJECT_KEY = process.env.AZURE_AI_PROJECT_KEY
 
-// Inicializar cliente de Azure AI Foundry
 let aiProjectClient
 try {
-  // Opción 1: Si hay API Key, usarla (más simple y directo)
   if (AZURE_AI_PROJECT_KEY) {
     aiProjectClient = new AIProjectClient(
       AZURE_AI_PROJECT_ENDPOINT,
       new AzureKeyCredential(AZURE_AI_PROJECT_KEY)
     )
     console.log('✅ Azure AI Foundry client initialized with API Key')
-  }
-  // Opción 2: Si no hay API Key, usar DefaultAzureCredential
-  else {
+  } else {
     aiProjectClient = new AIProjectClient(
       AZURE_AI_PROJECT_ENDPOINT,
       new DefaultAzureCredential()
@@ -150,13 +127,6 @@ try {
   }
 } catch (error) {
   console.error('❌ Error initializing Azure AI Foundry client:', error.message)
-  console.error('   Solutions:')
-  console.error(
-    '   1. Add AZURE_AI_PROJECT_KEY to your .env file (RECOMMENDED)'
-  )
-  console.error(
-    '   2. Or run "az login" if you want to use DefaultAzureCredential'
-  )
 }
 
 // ===== AZURE BLOB STORAGE CONFIGURATION =====
@@ -178,9 +148,7 @@ try {
       `✅ Azure Blob Storage client initialized for container: ${AZURE_CONTAINER_NAME}`
     )
   } else {
-    console.warn(
-      '⚠️  AZURE_STORAGE_CONNECTION_STRING not found - document preview will not work'
-    )
+    console.warn('⚠️  AZURE_STORAGE_CONNECTION_STRING not found')
   }
 } catch (error) {
   console.error(
@@ -191,13 +159,27 @@ try {
 
 // ===== UTILITIES =====
 const JWT_SECRET = process.env.JWT_SECRET
-
-// Store active threads per user session (in production, use Redis or similar)
 const userThreads = new Map()
 
-/**
- * Get or create thread for user session
- */
+function getContentType(filename) {
+  const ext = filename.split('.').pop().toLowerCase()
+  const contentTypes = {
+    pdf: 'application/pdf',
+    txt: 'text/plain',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    msg: 'application/vnd.ms-outlook',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+  }
+  return contentTypes[ext] || 'application/octet-stream'
+}
+
 async function getOrCreateThread(sessionId) {
   if (userThreads.has(sessionId)) {
     console.log(`   ♻️  Reusing existing thread: ${userThreads.get(sessionId)}`)
@@ -211,9 +193,6 @@ async function getOrCreateThread(sessionId) {
   return thread.id
 }
 
-/**
- * Delete thread for user session
- */
 async function deleteThread(sessionId) {
   if (userThreads.has(sessionId)) {
     const threadId = userThreads.get(sessionId)
@@ -232,31 +211,226 @@ async function deleteThread(sessionId) {
 }
 
 /**
- * Run agent conversation and wait for completion
+ * 🔥 Genera filtro OData usando el campo case_number
+ */
+function generateCaseNumberFilter(userCases) {
+  if (userCases.includes('*')) {
+    console.log('   🔓 Admin access - no filter needed')
+    return null
+  }
+
+  const filters = userCases.map((caseNum) => `case_number eq '${caseNum}'`)
+  const filterString = filters.join(' or ')
+
+  console.log(`   🔒 Case filter: ${filterString}`)
+  return filterString
+}
+
+async function findDocumentInStorage(filename, userCases, containerClient) {
+  console.log(`\n🔍 BÚSQUEDA INTELIGENTE: "${filename}"`)
+
+  const casesToSearch = userCases.includes('*') ? [''] : userCases
+
+  // ESTRATEGIA 1: Búsqueda EXACTA
+  console.log(`   📍 Estrategia 1: Búsqueda exacta...`)
+  for (const userCase of casesToSearch) {
+    const exactPaths = userCase
+      ? [
+          `${userCase}/${filename}`,
+          `${userCase}/docs/${filename}`,
+          `${userCase}/notes/${filename}`,
+          `${userCase}/Deposition_EUO/${filename}`,
+        ]
+      : [filename] // Admin sin prefijo
+
+    for (const path of exactPaths) {
+      const blobClient = containerClient.getBlobClient(path)
+      try {
+        const exists = await blobClient.exists()
+        if (exists) {
+          console.log(`   ✅ ENCONTRADO (exacto): ${path}`)
+          return { blobPath: path, blobClient }
+        }
+      } catch (e) {
+        // Continuar si falla
+      }
+    }
+  }
+
+  // ESTRATEGIA 2: Búsqueda CASE-INSENSITIVE
+  console.log(`   📍 Estrategia 2: Búsqueda case-insensitive...`)
+  const lowerFilename = filename.toLowerCase()
+
+  for (const userCase of casesToSearch) {
+    try {
+      for await (const blob of containerClient.listBlobsFlat({
+        prefix: userCase || undefined,
+      })) {
+        const blobFilename = blob.name.split('/').pop()
+
+        if (blobFilename.toLowerCase() === lowerFilename) {
+          console.log(`   ✅ ENCONTRADO (case-insensitive): ${blob.name}`)
+          return {
+            blobPath: blob.name,
+            blobClient: containerClient.getBlobClient(blob.name),
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`   ⚠️  Error en estrategia 2: ${e.message}`)
+    }
+  }
+
+  // ESTRATEGIA 3: Búsqueda FUZZY
+  console.log(`   📍 Estrategia 3: Búsqueda fuzzy...`)
+  const normalizedSearch = filename
+    .toLowerCase()
+    .replace(/[_\-\s]+/g, '')
+    .replace(/\.(pdf|docx?|xlsx?|msg|txt)$/i, '')
+
+  for (const userCase of casesToSearch) {
+    try {
+      for await (const blob of containerClient.listBlobsFlat({
+        prefix: userCase || undefined,
+      })) {
+        const blobFilename = blob.name.split('/').pop()
+        const normalizedBlob = blobFilename
+          .toLowerCase()
+          .replace(/[_\-\s]+/g, '')
+          .replace(/\.(pdf|docx?|xlsx?|msg|txt)$/i, '')
+
+        if (normalizedBlob === normalizedSearch) {
+          console.log(`   ✅ ENCONTRADO (fuzzy): ${blob.name}`)
+          return {
+            blobPath: blob.name,
+            blobClient: containerClient.getBlobClient(blob.name),
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`   ⚠️  Error en estrategia 3: ${e.message}`)
+    }
+  }
+
+  // ESTRATEGIA 4: Búsqueda por KEYWORDS
+  console.log(`   📍 Estrategia 4: Búsqueda por keywords...`)
+  const keywords = filename
+    .toLowerCase()
+    .replace(/\.(pdf|docx?|xlsx?|msg|txt)$/i, '')
+    .split(/[-_\s]+/)
+    .filter((word) => word.length > 3 && !/^\d+$/.test(word))
+
+  console.log(`   🔑 Keywords: ${keywords.join(', ')}`)
+
+  for (const userCase of casesToSearch) {
+    try {
+      for await (const blob of containerClient.listBlobsFlat({
+        prefix: userCase || undefined,
+      })) {
+        const blobFilename = blob.name.split('/').pop().toLowerCase()
+
+        const matchCount = keywords.filter((kw) =>
+          blobFilename.includes(kw)
+        ).length
+        const matchPercentage = (matchCount / keywords.length) * 100
+
+        if (matchPercentage >= 80) {
+          console.log(
+            `   ✅ ENCONTRADO (keywords ${matchPercentage.toFixed(0)}%): ${
+              blob.name
+            }`
+          )
+          return {
+            blobPath: blob.name,
+            blobClient: containerClient.getBlobClient(blob.name),
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`   ⚠️  Error en estrategia 4: ${e.message}`)
+    }
+  }
+
+  console.log(`   ❌ NO ENCONTRADO después de 4 estrategias`)
+  return { blobPath: null, blobClient: null }
+}
+
+/**
+ * Ejecutar conversación del agente con filtrado por case_number
+ * SOLO confía en el filtro de Azure Search - sin validación adicional
  */
 async function runAgentConversation(threadId, userMessage, userCases) {
   try {
-    // Add user's allowed cases to the message context
-    const contextMessage = userCases.includes('*')
-      ? userMessage
-      : `[User has access to cases: ${userCases.join(', ')}]\n\n${userMessage}`
+    // 1️⃣ Generar filtro simple por case_number
+    const searchFilter = generateCaseNumberFilter(userCases)
 
-    // Create message in thread
+    // 2️⃣ Agregar contexto de seguridad
+    const securityContext = userCases.includes('*')
+      ? ''
+      : `SECURITY: You can ONLY access documents from case numbers: ${userCases.join(
+          ', '
+        )}.\n\n`
+
+    const contextMessage = `${securityContext}${userMessage}`
+
     await aiProjectClient.agents.messages.create(
       threadId,
       'user',
       contextMessage
     )
-
     console.log('   📩 Message added to thread')
 
-    // Create and run the agent
-    let run = await aiProjectClient.agents.runs.create(threadId, AZURE_AGENT_ID)
+    // 3️⃣ Crear opciones de ejecución con filtro
+    const runOptions = {
+      additional_instructions: userCases.includes('*')
+        ? undefined
+        : `CRITICAL: Only use documents from case numbers: ${userCases.join(
+            ', '
+          )}.`,
+    }
+
+    // 🔥 APLICAR FILTRO POR case_number
+    if (searchFilter) {
+      try {
+        runOptions.tool_resources = {
+          file_search: {
+            filter: searchFilter,
+          },
+        }
+        console.log('   🔒 Applied case_number filter via tool_resources')
+      } catch (error) {
+        console.warn(
+          '   ⚠️  Could not apply filter via tool_resources:',
+          error.message
+        )
+
+        try {
+          runOptions.tools = [
+            {
+              type: 'file_search',
+              file_search: {
+                filter: searchFilter,
+              },
+            },
+          ]
+          console.log('   🔒 Applied case_number filter via tools array')
+        } catch (e2) {
+          console.warn('   ⚠️  Could not apply filter via tools:', e2.message)
+        }
+      }
+    }
+
+    // 4️⃣ Ejecutar agente
+    let run = await aiProjectClient.agents.runs.create(
+      threadId,
+      AZURE_AGENT_ID,
+      runOptions
+    )
     console.log(`   🏃 Run started: ${run.id}`)
 
-    // Poll until completion
+    // Polling
     let iterations = 0
-    const maxIterations = 60 // 60 seconds timeout
+    const maxIterations = 60
 
     while (run.status === 'queued' || run.status === 'in_progress') {
       await new Promise((resolve) => setTimeout(resolve, 1000))
@@ -280,7 +454,7 @@ async function runAgentConversation(threadId, userMessage, userCases) {
       )
     }
 
-    // Get the latest messages for the assistant's response
+    // Obtener mensajes
     const messages = await aiProjectClient.agents.messages.list(threadId, {
       order: 'desc',
       limit: 1,
@@ -295,14 +469,13 @@ async function runAgentConversation(threadId, userMessage, userCases) {
           if (content.type === 'text' && 'text' in content) {
             assistantMessage = content.text.value
 
-            // Extract annotations from the message
             if (
               content.text.annotations &&
               content.text.annotations.length > 0
             ) {
               messageAnnotations = content.text.annotations
               console.log(
-                `   📎 Found ${messageAnnotations.length} annotations in message`
+                `   📎 Found ${messageAnnotations.length} annotations`
               )
             }
           }
@@ -311,8 +484,8 @@ async function runAgentConversation(threadId, userMessage, userCases) {
       }
     }
 
-    // Extract citations from annotations
-    console.log('   📋 Extracting citations from annotations...')
+    // 5️⃣ Extraer citas SIN validación - confiamos 100% en el filtro de Azure
+    console.log('   📋 Extracting citations (trusting Azure filter)...')
     let citations = []
 
     if (messageAnnotations.length > 0) {
@@ -324,7 +497,6 @@ async function runAgentConversation(threadId, userMessage, userCases) {
             filepath: null,
           }
 
-          // Check for url_citation type (Azure AI Search results)
           if (annotation.type === 'url_citation' && annotation.urlCitation) {
             citationInfo.title =
               annotation.urlCitation.title ||
@@ -332,12 +504,8 @@ async function runAgentConversation(threadId, userMessage, userCases) {
               'Document Reference'
             citationInfo.filepath = annotation.urlCitation.url
             citationInfo.content = `Document from Azure AI Search`
-
-            console.log(`   ✅ Extracted citation: ${citationInfo.title}`)
-            console.log(`   📂 Filepath: ${citationInfo.filepath}`)
-          }
-          // Check for file_citation type (file-based search)
-          else if (
+            console.log(`   ✅ Citation: ${citationInfo.title}`)
+          } else if (
             annotation.type === 'file_citation' &&
             annotation.file_citation
           ) {
@@ -347,7 +515,6 @@ async function runAgentConversation(threadId, userMessage, userCases) {
             citationInfo.content = quote
             citationInfo.filepath = fileId
 
-            // Try to extract filename from quote
             const filenamePattern =
               /\b\d{5}_\d{8}_\d+\.txt\b|\b[\w-]+\.(txt|pdf|msg|docx)\b/gi
             const filenameMatch = quote.match(filenamePattern)
@@ -357,17 +524,12 @@ async function runAgentConversation(threadId, userMessage, userCases) {
             } else {
               citationInfo.title = quote.substring(0, 50) || fileId
             }
-
-            console.log(`   ✅ Extracted citation: ${citationInfo.title}`)
-          }
-          // Check for file_path type
-          else if (annotation.type === 'file_path' && annotation.file_path) {
+            console.log(`   ✅ Citation: ${citationInfo.title}`)
+          } else if (annotation.type === 'file_path' && annotation.file_path) {
             citationInfo.title =
               annotation.file_path.file_id || 'File Reference'
             citationInfo.filepath = annotation.file_path.file_id
-          }
-          // Fallback: Use annotation text
-          else if (annotation.text) {
+          } else if (annotation.text) {
             citationInfo.title = annotation.text.substring(0, 100)
             citationInfo.content = annotation.text
           }
@@ -379,12 +541,11 @@ async function runAgentConversation(threadId, userMessage, userCases) {
       }
     }
 
-    // Also try to extract from "Documents Consulted:" section if agent followed instructions
+    // Extraer de "Documents Consulted"
     const docsPattern = /\*\*Documents Consulted:\*\*\s*\n((?:[-•]\s*.+\n?)+)/i
     const docsMatch = assistantMessage.match(docsPattern)
 
     if (docsMatch) {
-      console.log('   ✅ Found "Documents Consulted" section')
       const docsList = docsMatch[1]
       const docLines = docsList.match(/[-•]\s*(.+)/g)
 
@@ -392,7 +553,6 @@ async function runAgentConversation(threadId, userMessage, userCases) {
         docLines.forEach((line) => {
           const docName = line.replace(/^[-•]\s*/, '').trim()
           if (docName && docName.length > 0) {
-            // Avoid duplicates
             if (!citations.some((c) => c.title === docName)) {
               citations.push({
                 title: docName,
@@ -405,20 +565,23 @@ async function runAgentConversation(threadId, userMessage, userCases) {
       }
     }
 
-    console.log(`   📎 Total citations extracted: ${citations.length}`)
+    console.log(`   📎 Total citations: ${citations.length}`)
 
-    // Clean the message:
-    // 1. Remove annotation markers like 【3:0†source】
-    // 2. Remove the "Documents Consulted:" section (we already extracted it)
+    // Limpiar mensaje
     let cleanMessage = assistantMessage
-      .replace(/【[^】]*】/g, '') // Remove 【...】 markers
-      .replace(/---\s*\*\*Documents Consulted:\*\*[\s\S]*?---/gi, '') // Remove Documents Consulted section
-      .replace(/\*\*Documents Consulted:\*\*[\s\S]*$/i, '') // Remove if at the end without ---
+      .replace(/【[^】]*】/g, '')
+      .replace(/---\s*\*\*Documents Consulted:\*\*[\s\S]*?---/gi, '')
+      .replace(/\*\*Documents Consulted:\*\*[\s\S]*$/i, '')
       .trim()
 
     return {
       message: cleanMessage,
       citations: citations,
+      securityInfo: {
+        appliedFilter: searchFilter !== null,
+        filterType: 'case_number',
+        filterExpression: searchFilter,
+      },
     }
   } catch (error) {
     console.error('   ❌ Error in agent conversation:', error.message)
@@ -432,15 +595,12 @@ async function runAgentConversation(threadId, userMessage, userCases) {
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body
   const normalizedEmail = email.toLowerCase().trim()
-
   const user = userPermissions[normalizedEmail]
 
   if (!user) {
     return res.status(401).json({ error: 'Invalid credentials' })
   }
 
-  // Si el usuario viene del sistema real (no tiene password), permitir login
-  // En producción, aquí deberías validar contra tu sistema de autenticación real
   const isRealUser = !user.password
   const isDemoUser = user.password && user.password === password
 
@@ -448,7 +608,6 @@ app.post('/api/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid credentials' })
   }
 
-  // Generate JWT with session ID
   const sessionId = `${normalizedEmail}-${Date.now()}`
   const token = jwt.sign(
     {
@@ -489,7 +648,7 @@ function authenticateToken(req, res, next) {
   })
 }
 
-// Chat endpoint using Azure AI Foundry Agent
+// Chat endpoint with Azure AI Search filtering
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
     const { message, clearThread } = req.body
@@ -501,7 +660,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
 
     console.log(`\n${'='.repeat(60)}`)
-    console.log(`🤖 AGENT CHAT REQUEST`)
+    console.log(`🤖 AGENT CHAT (case_number FILTERING)`)
     console.log(`User: ${req.user.email} (${req.user.name})`)
     console.log(`Session: ${sessionId}`)
     console.log(`Allowed Cases: ${userCases.join(', ')}`)
@@ -509,19 +668,18 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     console.log(`Clear Thread: ${clearThread || false}`)
     console.log(`${'='.repeat(60)}\n`)
 
-    // Si se solicita limpiar thread, eliminar el actual
     if (clearThread) {
       await deleteThread(sessionId)
     }
 
-    // Obtener o crear thread para esta sesión
     const threadId = await getOrCreateThread(sessionId)
 
-    // Ejecutar conversación con el agente
-    console.log('🤖 Running agent conversation...')
+    console.log('🤖 Running agent with case_number filtering...')
     const response = await runAgentConversation(threadId, message, userCases)
 
-    console.log(`✅ Agent response received\n`)
+    console.log(`✅ Response ready`)
+    console.log(`🔒 Filter applied: ${response.securityInfo.appliedFilter}`)
+    console.log(`📎 Citations: ${response.citations.length}\n`)
 
     res.json(response)
   } catch (error) {
@@ -566,9 +724,8 @@ app.get('/api/me', authenticateToken, (req, res) => {
   })
 })
 
-// Endpoint to reload permissions (útil para actualizar sin reiniciar servidor)
+// Endpoint to reload permissions
 app.post('/api/admin/reload-permissions', authenticateToken, (req, res) => {
-  // Verificar que sea admin
   if (!req.user.cases.includes('*')) {
     return res.status(403).json({ error: 'Admin access required' })
   }
@@ -620,90 +777,12 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
 
     console.log(`\n📄 Document URL Request: ${filename}`)
 
-    const getContentType = (filename) => {
-      const ext = filename.split('.').pop().toLowerCase()
-      const contentTypes = {
-        pdf: 'application/pdf',
-        txt: 'text/plain',
-        doc: 'application/msword',
-        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        xls: 'application/vnd.ms-excel',
-        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        msg: 'application/vnd.ms-outlook',
-        jpg: 'image/jpeg',
-        jpeg: 'image/jpeg',
-        png: 'image/png',
-        gif: 'image/gif',
-        webp: 'image/webp',
-      }
-      return contentTypes[ext] || 'application/octet-stream'
-    }
-
-    const normalizeFilename = (name) => {
-      return name
-        .toLowerCase()
-        .replace(/[_\-\s]+/g, '')
-        .replace(/\.pdf$/i, '')
-        .replace(/\.docx?$/i, '')
-        .replace(/\.xlsx?$/i, '')
-        .replace(/\.msg$/i, '')
-        .replace(/\.txt$/i, '')
-    }
-
-    const searchFilename = normalizeFilename(filename)
-    
-    let blobPath = null
-    let blobClient = null
-
-    //Búsqueda fuzzy en casos del usuario
-    console.log(`   🔍 Searching for file in user's accessible cases...`)
-
-    const casesToSearch = userCases.includes('*') ? [] : userCases
-
-    if (casesToSearch.length > 0) {
-      // Buscar en casos específicos del usuario
-      for (const userCase of casesToSearch) {
-        console.log(`   📂 Searching in case: ${userCase}`)
-        
-        for await (const blob of containerClient.listBlobsFlat({
-          prefix: userCase,
-        })) {
-          const blobFilename = blob.name.split('/').pop()
-          const normalizedBlobName = normalizeFilename(blobFilename)
-
-          if (
-            normalizedBlobName.includes(searchFilename) ||
-            searchFilename.includes(normalizedBlobName)
-          ) {
-            blobPath = blob.name
-            blobClient = containerClient.getBlobClient(blobPath)
-            console.log(`   ✅ Found match: ${blobFilename}`)
-            console.log(`   📁 Full path: ${blob.name}`)
-            break
-          }
-        }
-        if (blobPath) break
-      }
-    } else {
-      // Usuario con acceso a todos los casos (admin)
-      console.log(`   🔍 Admin access - searching entire container...`)
-      
-      for await (const blob of containerClient.listBlobsFlat()) {
-        const blobFilename = blob.name.split('/').pop()
-        const normalizedBlobName = normalizeFilename(blobFilename)
-
-        if (
-          normalizedBlobName.includes(searchFilename) ||
-          searchFilename.includes(normalizedBlobName)
-        ) {
-          blobPath = blob.name
-          blobClient = containerClient.getBlobClient(blobPath)
-          console.log(`   ✅ Found match: ${blobFilename}`)
-          console.log(`   📁 Full path: ${blob.name}`)
-          break
-        }
-      }
-    }
+    // 🔥 Usar la función de búsqueda inteligente
+    const { blobPath, blobClient } = await findDocumentInStorage(
+      filename,
+      userCases,
+      containerClient
+    )
 
     if (!blobPath || !blobClient) {
       console.log(`   ❌ Document not found: ${filename}`)
@@ -716,7 +795,7 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
       })
     }
 
-    // Verificar permisos basados en el caso del archivo
+    // Verificar permisos por caso
     const pathCaseMatch = blobPath.match(/^(\d{5})/)
     const actualCase = pathCaseMatch ? pathCaseMatch[1] : null
 
@@ -737,9 +816,10 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
       })
     }
 
-    // Generar SAS token para acceso temporal
+    // Obtener propiedades del blob
     const properties = await blobClient.getProperties()
 
+    // Generar SAS token
     const connectionParts = AZURE_STORAGE_CONNECTION_STRING.split(';')
     const accountName = connectionParts
       .find((p) => p.startsWith('AccountName='))
@@ -770,7 +850,7 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
     console.log(`   🔗 SAS URL generated (expires in 24h)`)
 
     const actualFilename = blobPath.split('/').pop()
-    const correctContentType = getContentType(actualFilename)
+    const correctContentType = getContentType(actualFilename) // ✅ Ahora funciona
 
     res.json({
       filename: actualFilename,
@@ -795,6 +875,7 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
   }
 })
 
+// Proxy endpoint OPTIONS
 app.options('/api/proxy/:sessionId/:filename', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
@@ -803,12 +884,13 @@ app.options('/api/proxy/:sessionId/:filename', (req, res) => {
   res.status(200).end()
 })
 
+// Proxy endpoint GET
 app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
   try {
     const { sessionId, filename: encodedFilename } = req.params
     const filename = decodeURIComponent(encodedFilename)
 
-    console.log(`\n📄 PROXY REQUEST (new route)`)
+    console.log(`\n📄 PROXY REQUEST`)
     console.log(`   📁 File: ${filename}`)
     console.log(`   🔑 Session: ${sessionId}`)
 
@@ -892,7 +974,7 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
     const caseMatch = filename.match(/^(\d{5})/)
     let caseNumber = caseMatch ? caseMatch[1] : null
 
-    // Strategy 1
+    // Strategy 1: Try exact paths
     if (caseNumber) {
       const commonPaths = [
         `${caseNumber}/docs/${filename}`,
@@ -913,7 +995,7 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
       }
     }
 
-    // Strategy 2: Fuzzy
+    // Strategy 2: Fuzzy search
     if (!blobPath) {
       const casesToSearch = userCases.includes('*') ? [] : userCases
 
@@ -955,7 +1037,7 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
       }
     }
 
-    // Strategy 3
+    // Strategy 3: Direct path
     if (!blobPath) {
       blobClient = containerClient.getBlobClient(filename)
       const exists = await blobClient.exists()
@@ -982,19 +1064,16 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' })
     }
 
-    // Get properties first to know the file size
     const properties = await blobClient.getProperties()
     const fileSize = properties.contentLength
     const actualFilename = blobPath.split('/').pop()
     const correctContentType = getContentType(actualFilename)
 
-    // 🔥 Handle Range Requests
     const range = req.headers.range
 
     if (range) {
       console.log(`   📊 Range request: ${range}`)
 
-      // Parse range header (format: "bytes=0-1023")
       const parts = range.replace(/bytes=/, '').split('-')
       const start = parseInt(parts[0], 10)
       const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
@@ -1002,17 +1081,14 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
 
       console.log(`   📦 Sending bytes ${start}-${end} of ${fileSize}`)
 
-      // Download only the requested range from Azure
       const downloadResponse = await blobClient.download(start, chunkSize)
 
-      // Set 206 Partial Content response
       res.status(206)
       res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`)
       res.setHeader('Accept-Ranges', 'bytes')
       res.setHeader('Content-Length', chunkSize)
       res.setHeader('Content-Type', correctContentType)
 
-      // CORS headers
       res.setHeader('Access-Control-Allow-Origin', '*')
       res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range')
@@ -1025,11 +1101,9 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
 
       console.log(`   ✅ Range request complete`)
     } else {
-      // Full file download
       console.log(`   📥 Downloading full file...`)
       const downloadResponse = await blobClient.download()
 
-      // Set headers for full response
       res.setHeader('Access-Control-Allow-Origin', '*')
       res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range')
@@ -1081,20 +1155,20 @@ app.get('/health', (req, res) => {
       agentId: AZURE_AGENT_ID,
       activeThreads: userThreads.size,
     },
+    security: {
+      filterType: 'case_number (Azure Search only)',
+      validationLayer: 'DISABLED - trusting Azure filter',
+    },
   })
 })
 
 app.listen(PORT, () => {
   console.log(`\n${'='.repeat(60)}`)
-  console.log(`🚀 ACTS Law RAG Backend Server (Azure AI Foundry Agent)`)
+  console.log(`🚀 ACTS Law RAG Backend (case_number FILTERING)`)
   console.log(`${'='.repeat(60)}`)
-  console.log(`📍 Server running on: http://localhost:${PORT}`)
-  console.log(`🤖 Agent ID: ${AZURE_AGENT_ID}`)
-  console.log(`🔗 Project Endpoint: ${AZURE_AI_PROJECT_ENDPOINT}`)
-  console.log(
-    `🔐 Permissions Mode: ${permissionsMetadata.mode || 'PRODUCTION'}`
-  )
-  console.log(`👥 Loaded Users: ${Object.keys(userPermissions).length}`)
-  console.log(`🧵 Active Threads: ${userThreads.size}`)
+  console.log(`📍 Server: http://localhost:${PORT}`)
+  console.log(`🤖 Agent: ${AZURE_AGENT_ID}`)
+  console.log(`🔒 Security: Azure Search filtering ONLY`)
+  console.log(`✅ No validation layer - trusting Azure filter 100%`)
   console.log(`${'='.repeat(60)}\n`)
 })

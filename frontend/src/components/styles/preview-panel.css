@@ -2,9 +2,11 @@
 @keyframes slide-in {
   from {
     transform: translateX(100%);
+    opacity: 0;
   }
   to {
     transform: translateX(0);
+    opacity: 1;
   }
 }
 
@@ -14,7 +16,7 @@
 
 /* Estilos adicionales para el preview panel */
 .document-preview-panel {
-  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.1);
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.15);
 }
 
 /* Estilo para scrollbars en el preview */
@@ -42,4 +44,9 @@
 
 .dark .document-preview-panel::-webkit-scrollbar-thumb:hover {
   background-color: rgba(107, 114, 128, 0.7);
+}
+
+/* Transiciones suaves para el contenido del chat */
+.chat-container-transition {
+  transition: margin-right 0.3s ease-in-out;
 }
