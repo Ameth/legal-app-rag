@@ -12,6 +12,10 @@ import {
   BlobSASPermissions,
   StorageSharedKeyCredential,
 } from '@azure/storage-blob'
+import {
+  SearchClient,
+  AzureKeyCredential as SearchKeyCredential,
+} from '@azure/search-documents'
 
 dotenv.config()
 
@@ -157,6 +161,31 @@ try {
   )
 }
 
+// ===== AZURE SEARCH CONFIGURATION (NUEVO) =====
+const AZURE_SEARCH_ENDPOINT = process.env.AZURE_SEARCH_ENDPOINT
+const AZURE_SEARCH_KEY = process.env.AZURE_SEARCH_KEY
+const AZURE_SEARCH_INDEX = process.env.AZURE_SEARCH_INDEX
+
+let searchClient
+try {
+  if (AZURE_SEARCH_ENDPOINT && AZURE_SEARCH_KEY && AZURE_SEARCH_INDEX) {
+    searchClient = new SearchClient(
+      AZURE_SEARCH_ENDPOINT,
+      AZURE_SEARCH_INDEX,
+      new SearchKeyCredential(AZURE_SEARCH_KEY)
+    )
+    console.log(
+      '✅ Azure Search client initialized for instant document lookup'
+    )
+  } else {
+    console.warn(
+      '⚠️  Azure Search credentials not found - using fallback search'
+    )
+  }
+} catch (error) {
+  console.error('❌ Error initializing Azure Search client:', error.message)
+}
+
 // ===== UTILITIES =====
 const JWT_SECRET = process.env.JWT_SECRET
 const userThreads = new Map()
@@ -226,41 +255,123 @@ function generateCaseNumberFilter(userCases) {
   return filterString
 }
 
+/**
+ * 🚀 Obtener blobPath desde Azure Search Index usando el título
+ * Búsqueda flexible que maneja variaciones en nombres
+ */
+async function getBlobPathFromIndex(filename) {
+  if (!searchClient) {
+    console.warn('   ⚠️  Search client not available')
+    return null
+  }
+
+  try {
+    console.log(`   🔍 Searching index for: "${filename}"`)
+
+    // Extraer palabras clave del filename (sin extensión, sin números, sin caracteres especiales)
+    const keywords = filename
+      .replace(/\.(pdf|docx?|xlsx?|msg|txt)$/i, '') // Quitar extensión
+      .replace(/[_\-]/g, ' ') // Reemplazar guiones/underscores por espacios
+      .replace(/\d{4}-\d{2}-\d{2}/g, '') // Quitar fechas YYYY-MM-DD
+      .replace(/\d{2}-\d{2}-\d{2}/g, '') // Quitar fechas MM-DD-YY
+      .replace(/\d{8}/g, '') // Quitar fechas YYYYMMDD
+      .split(/\s+/)
+      .filter((word) => word.length >= 4 && !/^\d+$/.test(word)) // Palabras >= 4 chars, no solo números
+      .slice(0, 5) // Tomar las 5 primeras palabras importantes
+      .join(' ')
+      .trim()
+
+    if (!keywords || keywords.length < 3) {
+      console.log(`   ⚠️  No valid keywords extracted from: "${filename}"`)
+      return null
+    }
+
+    console.log(`   🔑 Keywords: "${keywords}"`)
+
+    // Búsqueda con las palabras clave
+    const searchResults = await searchClient.search(keywords, {
+      searchFields: ['title'],
+      select: ['url', 'title'],
+      top: 10, // Aumentar resultados para mejor chance
+      queryType: 'simple',
+      searchMode: 'any', // Buscar cualquier palabra clave
+    })
+
+    let bestMatch = null
+    let bestScore = 0
+
+    for await (const result of searchResults.results) {
+      const docTitle = result.document.title || ''
+
+      console.log(`      📄 Result: "${docTitle}" | Score: ${result.score}`)
+
+      // Calcular similitud simple
+      const docTitleLower = docTitle.toLowerCase()
+      const filenameLower = filename.toLowerCase()
+      const keywordsArray = keywords.toLowerCase().split(/\s+/)
+
+      // Contar cuántas palabras clave coinciden
+      let matches = 0
+      for (const keyword of keywordsArray) {
+        if (docTitleLower.includes(keyword)) {
+          matches++
+        }
+      }
+
+      const score = matches / keywordsArray.length
+
+      if (score > bestScore && result.document.url) {
+        bestScore = score
+        bestMatch = {
+          title: docTitle,
+          url: result.document.url,
+          score: score,
+        }
+      }
+    }
+
+    if (bestMatch && bestScore >= 0.5) {
+      // Al menos 50% de coincidencia
+      // 🔧 LIMPIAR el blobPath antes de retornarlo
+      let cleanPath = bestMatch.url
+
+      // 1. Decodificar URL encoding (%20 → espacio, etc.)
+      cleanPath = decodeURIComponent(cleanPath)
+
+      // 2. Quitar caracteres extra al final (números solos, puntos, etc.)
+      cleanPath = cleanPath.replace(/[0-9]+$/, '') // Quitar números al final
+      cleanPath = cleanPath.replace(/\.+$/, '') // Quitar puntos al final
+
+      console.log(
+        `   ⚡ Found match (${Math.round(bestScore * 100)}%): "${
+          bestMatch.title
+        }"`
+      )
+      console.log(`   ⚡ BlobPath (cleaned): ${cleanPath}`)
+
+      return cleanPath
+    }
+
+    console.log(
+      `   ⚠️  No good match found (best score: ${Math.round(bestScore * 100)}%)`
+    )
+    return null
+  } catch (error) {
+    console.error(`   ⚠️  Error fetching blobPath from index:`, error.message)
+    return null
+  }
+}
+
+/**
+ * 🐢 FALLBACK: Búsqueda tradicional en Blob Storage (solo si falla el índice)
+ * Mantener solo para casos edge donde el índice no tenga el documento
+ */
 async function findDocumentInStorage(filename, userCases, containerClient) {
-  console.log(`\n🔍 BÚSQUEDA INTELIGENTE: "${filename}"`)
+  console.log(`\n🔍 FALLBACK: Searching in Blob Storage for: "${filename}"`)
 
   const casesToSearch = userCases.includes('*') ? [''] : userCases
 
-  // ESTRATEGIA 1: Búsqueda EXACTA
-  console.log(`   📍 Estrategia 1: Búsqueda exacta...`)
-  for (const userCase of casesToSearch) {
-    const exactPaths = userCase
-      ? [
-          `${userCase}/${filename}`,
-          `${userCase}/docs/${filename}`,
-          `${userCase}/notes/${filename}`,
-          `${userCase}/Deposition_EUO/${filename}`,
-        ]
-      : [filename] // Admin sin prefijo
-
-    for (const path of exactPaths) {
-      const blobClient = containerClient.getBlobClient(path)
-      try {
-        const exists = await blobClient.exists()
-        if (exists) {
-          console.log(`   ✅ ENCONTRADO (exacto): ${path}`)
-          return { blobPath: path, blobClient }
-        }
-      } catch (e) {
-        // Continuar si falla
-      }
-    }
-  }
-
-  // ESTRATEGIA 2: Búsqueda CASE-INSENSITIVE
-  console.log(`   📍 Estrategia 2: Búsqueda case-insensitive...`)
-  const lowerFilename = filename.toLowerCase()
-
+  // Búsqueda exacta por nombre
   for (const userCase of casesToSearch) {
     try {
       for await (const blob of containerClient.listBlobsFlat({
@@ -268,8 +379,8 @@ async function findDocumentInStorage(filename, userCases, containerClient) {
       })) {
         const blobFilename = blob.name.split('/').pop()
 
-        if (blobFilename.toLowerCase() === lowerFilename) {
-          console.log(`   ✅ ENCONTRADO (case-insensitive): ${blob.name}`)
+        if (blobFilename === filename) {
+          console.log(`   ✅ FOUND: ${blob.name}`)
           return {
             blobPath: blob.name,
             blobClient: containerClient.getBlobClient(blob.name),
@@ -277,91 +388,20 @@ async function findDocumentInStorage(filename, userCases, containerClient) {
         }
       }
     } catch (e) {
-      console.warn(`   ⚠️  Error en estrategia 2: ${e.message}`)
+      console.warn(`   ⚠️  Error in fallback search: ${e.message}`)
     }
   }
 
-  // ESTRATEGIA 3: Búsqueda FUZZY
-  console.log(`   📍 Estrategia 3: Búsqueda fuzzy...`)
-  const normalizedSearch = filename
-    .toLowerCase()
-    .replace(/[_\-\s]+/g, '')
-    .replace(/\.(pdf|docx?|xlsx?|msg|txt)$/i, '')
-
-  for (const userCase of casesToSearch) {
-    try {
-      for await (const blob of containerClient.listBlobsFlat({
-        prefix: userCase || undefined,
-      })) {
-        const blobFilename = blob.name.split('/').pop()
-        const normalizedBlob = blobFilename
-          .toLowerCase()
-          .replace(/[_\-\s]+/g, '')
-          .replace(/\.(pdf|docx?|xlsx?|msg|txt)$/i, '')
-
-        if (normalizedBlob === normalizedSearch) {
-          console.log(`   ✅ ENCONTRADO (fuzzy): ${blob.name}`)
-          return {
-            blobPath: blob.name,
-            blobClient: containerClient.getBlobClient(blob.name),
-          }
-        }
-      }
-    } catch (e) {
-      console.warn(`   ⚠️  Error en estrategia 3: ${e.message}`)
-    }
-  }
-
-  // ESTRATEGIA 4: Búsqueda por KEYWORDS
-  console.log(`   📍 Estrategia 4: Búsqueda por keywords...`)
-  const keywords = filename
-    .toLowerCase()
-    .replace(/\.(pdf|docx?|xlsx?|msg|txt)$/i, '')
-    .split(/[-_\s]+/)
-    .filter((word) => word.length > 3 && !/^\d+$/.test(word))
-
-  console.log(`   🔑 Keywords: ${keywords.join(', ')}`)
-
-  for (const userCase of casesToSearch) {
-    try {
-      for await (const blob of containerClient.listBlobsFlat({
-        prefix: userCase || undefined,
-      })) {
-        const blobFilename = blob.name.split('/').pop().toLowerCase()
-
-        const matchCount = keywords.filter((kw) =>
-          blobFilename.includes(kw)
-        ).length
-        const matchPercentage = (matchCount / keywords.length) * 100
-
-        if (matchPercentage >= 80) {
-          console.log(
-            `   ✅ ENCONTRADO (keywords ${matchPercentage.toFixed(0)}%): ${
-              blob.name
-            }`
-          )
-          return {
-            blobPath: blob.name,
-            blobClient: containerClient.getBlobClient(blob.name),
-          }
-        }
-      }
-    } catch (e) {
-      console.warn(`   ⚠️  Error en estrategia 4: ${e.message}`)
-    }
-  }
-
-  console.log(`   ❌ NO ENCONTRADO después de 4 estrategias`)
+  console.log(`   ❌ NOT FOUND in fallback search`)
   return { blobPath: null, blobClient: null }
 }
 
 /**
  * Ejecutar conversación del agente con filtrado por case_number
- * SOLO confía en el filtro de Azure Search - sin validación adicional
  */
 async function runAgentConversation(threadId, userMessage, userCases) {
   try {
-    // 1️⃣ Generar filtro simple por case_number
+    // 1️⃣ Generar filtro por case_number
     const searchFilter = generateCaseNumberFilter(userCases)
 
     // 2️⃣ Agregar contexto de seguridad
@@ -389,7 +429,6 @@ async function runAgentConversation(threadId, userMessage, userCases) {
           )}.`,
     }
 
-    // 🔥 APLICAR FILTRO POR case_number
     if (searchFilter) {
       try {
         runOptions.tool_resources = {
@@ -397,26 +436,9 @@ async function runAgentConversation(threadId, userMessage, userCases) {
             filter: searchFilter,
           },
         }
-        console.log('   🔒 Applied case_number filter via tool_resources')
+        console.log('   🔒 Applied case_number filter')
       } catch (error) {
-        console.warn(
-          '   ⚠️  Could not apply filter via tool_resources:',
-          error.message
-        )
-
-        try {
-          runOptions.tools = [
-            {
-              type: 'file_search',
-              file_search: {
-                filter: searchFilter,
-              },
-            },
-          ]
-          console.log('   🔒 Applied case_number filter via tools array')
-        } catch (e2) {
-          console.warn('   ⚠️  Could not apply filter via tools:', e2.message)
-        }
+        console.warn('   ⚠️  Could not apply filter:', error.message)
       }
     }
 
@@ -454,16 +476,19 @@ async function runAgentConversation(threadId, userMessage, userCases) {
       )
     }
 
-    // Obtener mensajes
-    const messages = await aiProjectClient.agents.messages.list(threadId, {
-      order: 'desc',
-      limit: 1,
-    })
+    // 5️⃣ Obtener mensajes del thread
+    const messagesResponse = await aiProjectClient.agents.messages.list(
+      threadId,
+      {
+        order: 'desc',
+        limit: 1,
+      }
+    )
 
     let assistantMessage = ''
     let messageAnnotations = []
 
-    for await (const message of messages) {
+    for await (const message of messagesResponse) {
       if (message.role === 'assistant') {
         for (const content of message.content) {
           if (content.type === 'text' && 'text' in content) {
@@ -484,8 +509,8 @@ async function runAgentConversation(threadId, userMessage, userCases) {
       }
     }
 
-    // 5️⃣ Extraer citas SIN validación - confiamos 100% en el filtro de Azure
-    console.log('   📋 Extracting citations (trusting Azure filter)...')
+    // 6️⃣ Extraer citations con blobPath desde Azure Search Index
+    console.log('   📋 Extracting citations with blob paths from index...')
     let citations = []
 
     if (messageAnnotations.length > 0) {
@@ -495,16 +520,51 @@ async function runAgentConversation(threadId, userMessage, userCases) {
             title: 'Reference',
             content: '',
             filepath: null,
+            blobPath: null,
+            chunk: null,
           }
 
           if (annotation.type === 'url_citation' && annotation.urlCitation) {
-            citationInfo.title =
-              annotation.urlCitation.title ||
-              annotation.urlCitation.url ||
-              'Document Reference'
-            citationInfo.filepath = annotation.urlCitation.url
+            const title = annotation.urlCitation.title || 'Document Reference'
+            const docId = annotation.urlCitation.url || ''
+
+            citationInfo.title = title
+            citationInfo.filepath = docId
+
+            // 🚀 OPTIMIZACIÓN: Obtener blobPath desde el índice
+            citationInfo.blobPath = await getBlobPathFromIndex(title)
+
             citationInfo.content = `Document from Azure AI Search`
-            console.log(`   ✅ Citation: ${citationInfo.title}`)
+
+            // Extraer chunk usando los índices
+            if (
+              annotation.startIndex !== undefined &&
+              annotation.endIndex !== undefined
+            ) {
+              const contextStart = Math.max(0, annotation.startIndex - 300)
+              const contextEnd = Math.min(
+                assistantMessage.length,
+                annotation.endIndex + 300
+              )
+
+              const extractedChunk = assistantMessage
+                .substring(contextStart, contextEnd)
+                .trim()
+
+              citationInfo.chunk = extractedChunk
+                .replace(/【[^】]*】/g, '')
+                .trim()
+
+              console.log(
+                `   ✅ ${title} | Path: ${
+                  citationInfo.blobPath || 'FALLBACK'
+                } | Chunk: ${citationInfo.chunk.length} chars`
+              )
+            } else {
+              console.log(
+                `   ✅ ${title} | Path: ${citationInfo.blobPath || 'FALLBACK'}`
+              )
+            }
           } else if (
             annotation.type === 'file_citation' &&
             annotation.file_citation
@@ -514,6 +574,7 @@ async function runAgentConversation(threadId, userMessage, userCases) {
 
             citationInfo.content = quote
             citationInfo.filepath = fileId
+            citationInfo.chunk = quote
 
             const filenamePattern =
               /\b\d{5}_\d{8}_\d+\.txt\b|\b[\w-]+\.(txt|pdf|msg|docx)\b/gi
@@ -521,17 +582,24 @@ async function runAgentConversation(threadId, userMessage, userCases) {
 
             if (filenameMatch && filenameMatch[0]) {
               citationInfo.title = filenameMatch[0]
+              citationInfo.blobPath = await getBlobPathFromIndex(
+                citationInfo.title
+              )
             } else {
               citationInfo.title = quote.substring(0, 50) || fileId
             }
-            console.log(`   ✅ Citation: ${citationInfo.title}`)
+
+            console.log(
+              `   ✅ ${citationInfo.title} | Path: ${
+                citationInfo.blobPath || 'FALLBACK'
+              } | Chunk: ${citationInfo.chunk.length} chars`
+            )
           } else if (annotation.type === 'file_path' && annotation.file_path) {
             citationInfo.title =
               annotation.file_path.file_id || 'File Reference'
             citationInfo.filepath = annotation.file_path.file_id
-          } else if (annotation.text) {
-            citationInfo.title = annotation.text.substring(0, 100)
-            citationInfo.content = annotation.text
+
+            console.log(`   ✅ ${citationInfo.title}`)
           }
 
           citations.push(citationInfo)
@@ -541,7 +609,7 @@ async function runAgentConversation(threadId, userMessage, userCases) {
       }
     }
 
-    // Extraer de "Documents Consulted"
+    // 7️⃣ Extraer de "Documents Consulted"
     const docsPattern = /\*\*Documents Consulted:\*\*\s*\n((?:[-•]\s*.+\n?)+)/i
     const docsMatch = assistantMessage.match(docsPattern)
 
@@ -558,6 +626,8 @@ async function runAgentConversation(threadId, userMessage, userCases) {
                 title: docName,
                 content: 'Document consulted by agent',
                 filepath: docName,
+                blobPath: null,
+                chunk: null,
               })
             }
           }
@@ -567,16 +637,150 @@ async function runAgentConversation(threadId, userMessage, userCases) {
 
     console.log(`   📎 Total citations: ${citations.length}`)
 
-    // Limpiar mensaje
+    // 8️⃣ Extraer términos de búsqueda del chunk
+    const extractSearchTermsFromChunks = (citations, assistantMessage) => {
+      const allTerms = new Set()
+      let totalChunkChars = 0
+
+      citations.forEach((citation) => {
+        if (!citation.chunk || citation.chunk.length < 20) return
+
+        totalChunkChars += citation.chunk.length
+        const chunk = citation.chunk
+
+        const words = chunk
+          .replace(/[^\w\s'-]/g, ' ')
+          .split(/\s+/)
+          .map((word) => word.trim().toLowerCase())
+          .filter((word) => word.length >= 3)
+
+        words.forEach((word) => allTerms.add(word))
+
+        const caseNumbers = chunk.match(/\b\d{5}\b/g) || []
+        caseNumbers.forEach((num) => allTerms.add(num))
+
+        const dates = chunk.match(/\b\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}\b/g) || []
+        dates.forEach((date) => allTerms.add(date))
+
+        const emails =
+          chunk.match(
+            /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/gi
+          ) || []
+        emails.forEach((email) => allTerms.add(email.toLowerCase()))
+      })
+
+      if (
+        totalChunkChars < 100 &&
+        assistantMessage &&
+        assistantMessage.length > 50
+      ) {
+        const cleanMessage = assistantMessage.replace(/【[^】]*】/g, '').trim()
+
+        const words = cleanMessage
+          .replace(/[^\w\s'-]/g, ' ')
+          .split(/\s+/)
+          .map((word) => word.trim().toLowerCase())
+          .filter((word) => word.length >= 4)
+
+        words.forEach((word) => allTerms.add(word))
+
+        const properNouns =
+          cleanMessage.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/g) || []
+        properNouns.forEach((name) => {
+          if (name.length >= 3) {
+            allTerms.add(name.toLowerCase())
+          }
+        })
+
+        const caseNumbers = cleanMessage.match(/\b\d{5}\b/g) || []
+        caseNumbers.forEach((num) => allTerms.add(num))
+
+        const dates =
+          cleanMessage.match(/\b\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}\b/g) || []
+        dates.forEach((date) => allTerms.add(date))
+      }
+
+      const terms = Array.from(allTerms).sort((a, b) => b.length - a.length)
+      return terms.slice(0, 20)
+    }
+
+    const searchTerms = extractSearchTermsFromChunks(
+      citations,
+      assistantMessage
+    )
+
+    // 9️⃣ Extraer snippets de contexto
+    const extractContextSnippets = (citations, searchTerms) => {
+      const snippets = []
+
+      citations.forEach((citation) => {
+        if (!citation.chunk || citation.chunk.length < 50) return
+
+        const relevantTerms = searchTerms.slice(0, 10)
+
+        relevantTerms.forEach((term) => {
+          const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+          try {
+            const regex = new RegExp(
+              `(.{0,70})\\b${escapedTerm}\\b(.{0,70})`,
+              'gi'
+            )
+            const matches = [...citation.chunk.matchAll(regex)]
+
+            matches.forEach((match) => {
+              if (match && match[0]) {
+                const snippet = {
+                  text: match[0].trim(),
+                  term: term,
+                  source: citation.title,
+                  beforeContext: match[1] ? match[1].trim() : '',
+                  matchedTerm:
+                    match[0].match(
+                      new RegExp(`\\b${escapedTerm}\\b`, 'i')
+                    )?.[0] || term,
+                  afterContext: match[2] ? match[2].trim() : '',
+                }
+                snippets.push(snippet)
+              }
+            })
+          } catch (e) {
+            // Ignorar errores de regex
+          }
+        })
+      })
+
+      const uniqueSnippets = []
+      const seenTexts = new Set()
+
+      for (const snippet of snippets) {
+        const normalizedText = snippet.text.toLowerCase().replace(/\s+/g, ' ')
+        if (!seenTexts.has(normalizedText)) {
+          seenTexts.add(normalizedText)
+          uniqueSnippets.push(snippet)
+        }
+      }
+
+      uniqueSnippets.sort((a, b) => b.term.length - a.term.length)
+      return uniqueSnippets.slice(0, 8)
+    }
+
+    const contextSnippets = extractContextSnippets(citations, searchTerms)
+
+    // 🔟 Limpiar mensaje
     let cleanMessage = assistantMessage
       .replace(/【[^】]*】/g, '')
       .replace(/---\s*\*\*Documents Consulted:\*\*[\s\S]*?---/gi, '')
       .replace(/\*\*Documents Consulted:\*\*[\s\S]*$/i, '')
       .trim()
 
+    console.log(`   ✅ Response ready with instant URL lookups`)
+
     return {
       message: cleanMessage,
       citations: citations,
+      searchTerms: searchTerms,
+      contextSnippets: contextSnippets,
       securityInfo: {
         appliedFilter: searchFilter !== null,
         filterType: 'case_number',
@@ -648,7 +852,7 @@ function authenticateToken(req, res, next) {
   })
 }
 
-// Chat endpoint with Azure AI Search filtering
+// Chat endpoint
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
     const { message, clearThread } = req.body
@@ -660,12 +864,10 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
 
     console.log(`\n${'='.repeat(60)}`)
-    console.log(`🤖 AGENT CHAT (case_number FILTERING)`)
-    console.log(`User: ${req.user.email} (${req.user.name})`)
-    console.log(`Session: ${sessionId}`)
-    console.log(`Allowed Cases: ${userCases.join(', ')}`)
+    console.log(`🤖 AGENT CHAT`)
+    console.log(`User: ${req.user.email}`)
+    console.log(`Cases: ${userCases.join(', ')}`)
     console.log(`Question: ${message}`)
-    console.log(`Clear Thread: ${clearThread || false}`)
     console.log(`${'='.repeat(60)}\n`)
 
     if (clearThread) {
@@ -673,18 +875,16 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
 
     const threadId = await getOrCreateThread(sessionId)
-
-    console.log('🤖 Running agent with case_number filtering...')
     const response = await runAgentConversation(threadId, message, userCases)
 
-    console.log(`✅ Response ready`)
-    console.log(`🔒 Filter applied: ${response.securityInfo.appliedFilter}`)
-    console.log(`📎 Citations: ${response.citations.length}\n`)
+    console.log(
+      `✅ Response ready with ${response.citations.length} citations\n`
+    )
 
     res.json(response)
   } catch (error) {
     console.error('\n❌ ERROR in /api/chat:')
-    console.error('Error details:', error.message)
+    console.error('Details:', error.message)
     console.error(`${'='.repeat(60)}\n`)
 
     res.status(500).json({
@@ -694,7 +894,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   }
 })
 
-// Clear chat (delete thread)
+// Clear chat
 app.post('/api/chat/clear', authenticateToken, async (req, res) => {
   try {
     const sessionId = req.user.sessionId
@@ -724,7 +924,7 @@ app.get('/api/me', authenticateToken, (req, res) => {
   })
 })
 
-// Endpoint to reload permissions
+// Reload permissions
 app.post('/api/admin/reload-permissions', authenticateToken, (req, res) => {
   if (!req.user.cases.includes('*')) {
     return res.status(403).json({ error: 'Admin access required' })
@@ -739,7 +939,7 @@ app.post('/api/admin/reload-permissions', authenticateToken, (req, res) => {
   })
 })
 
-// Endpoint para ver información de permisos
+// Permissions info
 app.get('/api/admin/permissions-info', authenticateToken, (req, res) => {
   if (!req.user.cases.includes('*')) {
     return res.status(403).json({ error: 'Admin access required' })
@@ -758,45 +958,89 @@ app.get('/api/admin/permissions-info', authenticateToken, (req, res) => {
   })
 })
 
-// Endpoint to get document URL from filename
+// 🚀 OPTIMIZED: Get document URL (usa índice primero, fallback después)
 app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
   try {
-    const { filename } = req.body
+    const { filename, blobPath } = req.body
     const userCases = req.user.cases
-
-    if (!filename) {
-      return res.status(400).json({ error: 'Filename required' })
-    }
 
     if (!containerClient) {
       return res.status(503).json({
         error: 'Azure Storage not configured',
-        details: 'AZURE_STORAGE_CONNECTION_STRING missing',
       })
     }
 
-    console.log(`\n📄 Document URL Request: ${filename}`)
+    console.log(`\n📄 Getting document: ${filename}`)
 
-    // 🔥 Usar la función de búsqueda inteligente
-    const { blobPath, blobClient } = await findDocumentInStorage(
-      filename,
-      userCases,
-      containerClient
-    )
+    let finalBlobPath = blobPath
+    let blobClient = null
+    let source = 'unknown'
 
-    if (!blobPath || !blobClient) {
-      console.log(`   ❌ Document not found: ${filename}`)
+    // ESTRATEGIA 1: Si viene blobPath del chat (desde el índice), usarlo directamente
+    if (finalBlobPath) {
+      console.log(`   ⚡ Using blobPath from index: ${finalBlobPath}`)
+      blobClient = containerClient.getBlobClient(finalBlobPath)
+
+      try {
+        const exists = await blobClient.exists()
+        if (exists) {
+          console.log(`   ✅ Found instantly via index!`)
+          source = 'index-direct'
+        } else {
+          console.log(`   ⚠️  Blob not found at indexed path, trying search...`)
+          finalBlobPath = null
+        }
+      } catch (e) {
+        console.warn(`   ⚠️  Error checking blob:`, e.message)
+        finalBlobPath = null
+      }
+    }
+
+    // ESTRATEGIA 2: Buscar en el índice por título
+    if (!finalBlobPath && filename && searchClient) {
+      console.log(`   🔍 Searching in Azure Search Index...`)
+      finalBlobPath = await getBlobPathFromIndex(filename)
+
+      if (finalBlobPath) {
+        blobClient = containerClient.getBlobClient(finalBlobPath)
+
+        try {
+          const exists = await blobClient.exists()
+          if (exists) {
+            console.log(`   ✅ Found via index search!`)
+            source = 'index-search'
+          } else {
+            finalBlobPath = null
+          }
+        } catch (e) {
+          finalBlobPath = null
+        }
+      }
+    }
+
+    // ESTRATEGIA 3: FALLBACK - búsqueda en Blob Storage (solo si falla todo)
+    if (!finalBlobPath && filename) {
+      console.log(`   🐢 Using fallback blob search...`)
+      const result = await findDocumentInStorage(
+        filename,
+        userCases,
+        containerClient
+      )
+      finalBlobPath = result.blobPath
+      blobClient = result.blobClient
+      source = 'fallback'
+    }
+
+    if (!finalBlobPath || !blobClient) {
+      console.log(`   ❌ Not found`)
       return res.status(404).json({
         error: 'Document not found',
         filename: filename,
-        searchedCases: userCases.includes('*') ? 'all' : userCases.join(', '),
-        suggestion:
-          'The document name from the agent might not match the exact file name in storage',
       })
     }
 
-    // Verificar permisos por caso
-    const pathCaseMatch = blobPath.match(/^(\d{5})/)
+    // Verificar permisos
+    const pathCaseMatch = finalBlobPath.match(/^(\d{5})/)
     const actualCase = pathCaseMatch ? pathCaseMatch[1] : null
 
     if (
@@ -804,11 +1048,7 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
       !userCases.includes('*') &&
       !userCases.includes(actualCase)
     ) {
-      console.log(
-        `   ❌ Access denied - Document is from case ${actualCase}, user has access to: ${userCases.join(
-          ', '
-        )}`
-      )
+      console.log(`   ❌ Access denied`)
       return res.status(403).json({
         error: 'Access denied to this document',
         documentCase: actualCase,
@@ -816,10 +1056,8 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
       })
     }
 
-    // Obtener propiedades del blob
+    // Generar SAS URL
     const properties = await blobClient.getProperties()
-
-    // Generar SAS token
     const connectionParts = AZURE_STORAGE_CONNECTION_STRING.split(';')
     const accountName = connectionParts
       .find((p) => p.startsWith('AccountName='))
@@ -836,27 +1074,29 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
     const sasToken = generateBlobSASQueryParameters(
       {
         containerName: AZURE_CONTAINER_NAME,
-        blobName: blobPath,
+        blobName: finalBlobPath,
         permissions: BlobSASPermissions.parse('r'),
         startsOn: new Date(new Date().valueOf() - 5 * 60 * 1000),
         expiresOn: new Date(new Date().valueOf() + 24 * 60 * 60 * 1000),
         version: '2021-08-06',
+        contentDisposition: 'inline',
       },
       sharedKeyCredential
     ).toString()
 
     const sasUrl = `${blobClient.url}?${sasToken}`
+    const actualFilename = finalBlobPath.split('/').pop()
+    const correctContentType = getContentType(actualFilename)
 
-    console.log(`   🔗 SAS URL generated (expires in 24h)`)
-
-    const actualFilename = blobPath.split('/').pop()
-    const correctContentType = getContentType(actualFilename) // ✅ Ahora funciona
+    const sourceEmoji =
+      source === 'index-direct' || source === 'index-search' ? '⚡' : '🐢'
+    console.log(`   ${sourceEmoji} SAS URL generated (via ${source})\n`)
 
     res.json({
       filename: actualFilename,
       originalSearch: filename,
       caseNumber: actualCase,
-      blobPath: blobPath,
+      blobPath: finalBlobPath,
       url: sasUrl,
       metadata: {
         size: properties.contentLength,
@@ -864,10 +1104,10 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
         lastModified: properties.lastModified,
       },
       expiresIn: '24 hours',
+      source: source,
     })
   } catch (error) {
     console.error('❌ Error getting document URL:', error.message)
-    console.error(error.stack)
     res.status(500).json({
       error: 'Error retrieving document URL',
       details: error.message,
@@ -875,16 +1115,7 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
   }
 })
 
-// Proxy endpoint OPTIONS
-app.options('/api/proxy/:sessionId/:filename', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range')
-  res.setHeader('Access-Control-Max-Age', '86400')
-  res.status(200).end()
-})
-
-// Proxy endpoint GET
+// Proxy endpoint para servir documentos
 app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
   try {
     const { sessionId, filename: encodedFilename } = req.params
@@ -936,115 +1167,31 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
       })
     }
 
-    const normalizeFilename = (name) => {
-      return name
-        .toLowerCase()
-        .replace(/[_\-\s]+/g, '')
-        .replace(/\.pdf$/i, '')
-        .replace(/\.docx?$/i, '')
-        .replace(/\.xlsx?$/i, '')
-        .replace(/\.msg$/i, '')
-        .replace(/\.txt$/i, '')
-    }
-
-    const searchFilename = normalizeFilename(filename)
-    console.log(`   🔍 Normalized: ${searchFilename}`)
-
-    const getContentType = (filename) => {
-      const ext = filename.split('.').pop().toLowerCase()
-      const contentTypes = {
-        pdf: 'application/pdf',
-        txt: 'text/plain',
-        doc: 'application/msword',
-        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        xls: 'application/vnd.ms-excel',
-        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        msg: 'application/vnd.ms-outlook',
-        jpg: 'image/jpeg',
-        jpeg: 'image/jpeg',
-        png: 'image/png',
-        gif: 'image/gif',
-        webp: 'image/webp',
-      }
-      return contentTypes[ext] || 'application/octet-stream'
-    }
-
-    let blobPath = null
+    // Buscar usando el índice primero
+    let blobPath = await getBlobPathFromIndex(filename)
     let blobClient = null
-    const caseMatch = filename.match(/^(\d{5})/)
-    let caseNumber = caseMatch ? caseMatch[1] : null
 
-    // Strategy 1: Try exact paths
-    if (caseNumber) {
-      const commonPaths = [
-        `${caseNumber}/docs/${filename}`,
-        `${caseNumber}/notes/${filename}`,
-        `${caseNumber}/${filename}`,
-        `docs/${caseNumber}/${filename}`,
-        `notes/${caseNumber}/${filename}`,
-      ]
+    if (blobPath) {
+      console.log(`   ⚡ Found via index: ${blobPath}`)
+      blobClient = containerClient.getBlobClient(blobPath)
 
-      for (const path of commonPaths) {
-        blobClient = containerClient.getBlobClient(path)
-        const exists = await blobClient.exists()
-        if (exists) {
-          blobPath = path
-          console.log(`   ✅ Exact match: ${path}`)
-          break
-        }
-      }
-    }
-
-    // Strategy 2: Fuzzy search
-    if (!blobPath) {
-      const casesToSearch = userCases.includes('*') ? [] : userCases
-
-      if (casesToSearch.length > 0) {
-        for (const userCase of casesToSearch) {
-          for await (const blob of containerClient.listBlobsFlat({
-            prefix: userCase,
-          })) {
-            const blobFilename = blob.name.split('/').pop()
-            const normalizedBlobName = normalizeFilename(blobFilename)
-
-            if (
-              normalizedBlobName.includes(searchFilename) ||
-              searchFilename.includes(normalizedBlobName)
-            ) {
-              blobPath = blob.name
-              blobClient = containerClient.getBlobClient(blobPath)
-              console.log(`   ✅ Fuzzy match: ${blobFilename}`)
-              break
-            }
-          }
-          if (blobPath) break
-        }
-      } else {
-        for await (const blob of containerClient.listBlobsFlat()) {
-          const blobFilename = blob.name.split('/').pop()
-          const normalizedBlobName = normalizeFilename(blobFilename)
-
-          if (
-            normalizedBlobName.includes(searchFilename) ||
-            searchFilename.includes(normalizedBlobName)
-          ) {
-            blobPath = blob.name
-            blobClient = containerClient.getBlobClient(blobPath)
-            console.log(`   ✅ Fuzzy match: ${blobFilename}`)
-            break
-          }
-        }
-      }
-    }
-
-    // Strategy 3: Direct path
-    if (!blobPath) {
-      blobClient = containerClient.getBlobClient(filename)
       const exists = await blobClient.exists()
-      if (exists) {
-        blobPath = filename
-        console.log(`   ✅ Direct path`)
+      if (!exists) {
+        console.log(`   ⚠️  Blob doesn't exist, using fallback`)
+        blobPath = null
       }
+    }
+
+    // Fallback a búsqueda tradicional
+    if (!blobPath) {
+      console.log(`   🐢 Using fallback search`)
+      const result = await findDocumentInStorage(
+        filename,
+        userCases,
+        containerClient
+      )
+      blobPath = result.blobPath
+      blobClient = result.blobClient
     }
 
     if (!blobPath || !blobClient) {
@@ -1072,14 +1219,10 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
     const range = req.headers.range
 
     if (range) {
-      console.log(`   📊 Range request: ${range}`)
-
       const parts = range.replace(/bytes=/, '').split('-')
       const start = parseInt(parts[0], 10)
       const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
       const chunkSize = end - start + 1
-
-      console.log(`   📦 Sending bytes ${start}-${end} of ${fileSize}`)
 
       const downloadResponse = await blobClient.download(start, chunkSize)
 
@@ -1088,30 +1231,17 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
       res.setHeader('Accept-Ranges', 'bytes')
       res.setHeader('Content-Length', chunkSize)
       res.setHeader('Content-Type', correctContentType)
-
       res.setHeader('Access-Control-Allow-Origin', '*')
-      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range')
       res.setHeader(
         'Access-Control-Expose-Headers',
         'Content-Range, Content-Length, Content-Type, Accept-Ranges'
       )
 
       downloadResponse.readableStreamBody.pipe(res)
-
-      console.log(`   ✅ Range request complete`)
     } else {
-      console.log(`   📥 Downloading full file...`)
       const downloadResponse = await blobClient.download()
 
       res.setHeader('Access-Control-Allow-Origin', '*')
-      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range')
-      res.setHeader(
-        'Access-Control-Expose-Headers',
-        'Content-Length, Content-Type, Content-Disposition, Accept-Ranges'
-      )
-
       res.setHeader('Content-Type', correctContentType)
       res.setHeader('Content-Length', fileSize)
       res.setHeader(
@@ -1121,17 +1251,12 @@ app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
       res.setHeader('Accept-Ranges', 'bytes')
       res.setHeader('Cache-Control', 'public, max-age=3600')
 
-      console.log(`   ✅ Serving: ${actualFilename}`)
-      console.log(`   📦 Type: ${correctContentType}`)
-      console.log(`   📏 Size: ${fileSize} bytes`)
-
       downloadResponse.readableStreamBody.pipe(res)
-
-      console.log(`   ✅ Proxy complete`)
     }
+
+    console.log(`   ✅ Proxy complete`)
   } catch (error) {
     console.error('❌ Proxy error:', error.message)
-    console.error(error.stack)
     res.status(500).json({
       error: 'Error loading document',
       details: error.message,
@@ -1155,8 +1280,18 @@ app.get('/health', (req, res) => {
       agentId: AZURE_AGENT_ID,
       activeThreads: userThreads.size,
     },
+    search: {
+      enabled: !!searchClient,
+      endpoint: AZURE_SEARCH_ENDPOINT || 'not configured',
+      index: AZURE_SEARCH_INDEX || 'not configured',
+      status: searchClient ? '⚡ instant lookup enabled' : '🐢 fallback only',
+    },
+    optimization: {
+      instantDocumentLoad: !!searchClient,
+      fallbackAvailable: true,
+    },
     security: {
-      filterType: 'case_number (Azure Search only)',
+      filterType: 'case_number (Azure Search)',
       validationLayer: 'DISABLED - trusting Azure filter',
     },
   })
@@ -1164,11 +1299,15 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`\n${'='.repeat(60)}`)
-  console.log(`🚀 ACTS Law RAG Backend (case_number FILTERING)`)
+  console.log(`🚀 ACTS Law RAG Backend (OPTIMIZED)`)
   console.log(`${'='.repeat(60)}`)
   console.log(`📍 Server: http://localhost:${PORT}`)
   console.log(`🤖 Agent: ${AZURE_AGENT_ID}`)
-  console.log(`🔒 Security: Azure Search filtering ONLY`)
-  console.log(`✅ No validation layer - trusting Azure filter 100%`)
+  console.log(`🔒 Security: Azure Search filtering`)
+  console.log(
+    `⚡ Optimization: ${
+      searchClient ? 'Instant lookup ENABLED' : 'Fallback only'
+    }`
+  )
   console.log(`${'='.repeat(60)}\n`)
 })

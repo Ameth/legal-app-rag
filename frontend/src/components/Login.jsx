@@ -40,7 +40,7 @@ function Login({ onLogin, theme, toggleTheme }) {
     {
       email: 'acohen@actslaw.com',
       name: 'Alexander Cohen',
-      cases: ['25092', '25096'],
+      cases: ['25092', '25096','25160'],
     },
     {
       email: 'dabir@actslaw.com',

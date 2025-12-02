@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "lastSync": "2025-11-12T19:32:34.137Z",
+    "lastSync": "2025-11-26T18:55:25.424Z",
     "totalUsers": 14,
-    "totalCases": 2,
+    "totalCases": 3,
     "syncedBy": "sync-permissions.js"
   },
   "permissions": {
@@ -13,7 +13,8 @@
       "phone": "(310) 666-0699",
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "dabir@actslaw.com": {
@@ -23,7 +24,8 @@
       "phone": "(424) 288-4367",
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "accountants@actslaw.com": {
@@ -33,7 +35,8 @@
       "phone": "(424) 288-4367",
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "info@actslaw.com": {
@@ -43,7 +46,8 @@
       "phone": null,
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "ibf@actslaw.com": {
@@ -53,7 +57,8 @@
       "phone": null,
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "fai@actslaw.com": {
@@ -63,7 +68,8 @@
       "phone": null,
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "ldowney@actslaw.com": {
@@ -73,7 +79,8 @@
       "phone": "(424) 288-4367",
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "smarcil@actslaw.com": {
@@ -83,7 +90,8 @@
       "phone": null,
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "mlanger@actslaw.com": {
@@ -93,7 +101,8 @@
       "phone": null,
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "steichberg@actslaw.com": {
@@ -113,7 +122,8 @@
       "phone": "(424) 288-4367",
       "cases": [
         "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "rjulian@actslaw.com": {
@@ -123,17 +133,8 @@
       "phone": "(424) 288-4367",
       "cases": [
         "25092",
-        "25096"
-      ]
-    },
-    "achavarria@actslaw.com": {
-      "name": "Andrea Chavarria",
-      "email": "achavarria@actslaw.com",
-      "role": "Legal Assistant",
-      "phone": "(424) 288-4367",
-      "cases": [
-        "25092",
-        "25096"
+        "25096",
+        "25160"
       ]
     },
     "apoberezhskiy@actslaw.com": {
@@ -142,7 +143,17 @@
       "role": "Legal Assistant",
       "phone": "(424) 288-4367",
       "cases": [
-        "25096"
+        "25096",
+        "25160"
+      ]
+    },
+    "achavarria@actslaw.com": {
+      "name": "Andrea Chavarria",
+      "email": "achavarria@actslaw.com",
+      "role": "Legal Assistant",
+      "phone": "(424) 288-4367",
+      "cases": [
+        "25160"
       ]
     }
   }

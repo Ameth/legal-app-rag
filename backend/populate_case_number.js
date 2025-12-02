@@ -161,10 +161,10 @@ async function populateMissingOnly() {
       })
 
       const totalWithCaseNumber = allWithCase.count || 0
-      const coverage = Math.round((totalWithCaseNumber / 141634) * 100)
+      const coverage = Math.round((totalWithCaseNumber / 151815) * 100)
 
       console.log(
-        `📈 Cobertura total: ${totalWithCaseNumber.toLocaleString()} de 141,634 (${coverage}%)\n`
+        `📈 Cobertura total: ${totalWithCaseNumber.toLocaleString()} de 151,815 (${coverage}%)\n`
       )
 
       if (coverage >= 99) {

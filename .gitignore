@@ -38,13 +38,15 @@ frontend/yarn-debug.log*
 frontend/dist/
 frontend/build/
 
+acts-case-function/
+
 # Vite
 frontend/.vite/
 frontend/dist-ssr
 *.local
 
 # ===== EDITOR / IDE =====
-.vscode/
+
 .idea/
 *.swp
 *.swo

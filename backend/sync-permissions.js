@@ -60,7 +60,7 @@ async function authenticateSmartAdvocate() {
  * Obtiene la lista de casos desde Azure Storage (nombres de carpetas)
  */
 async function getCaseNumbersFromAzureStorage() {
-  console.log('\n📦 Conectando a Azure Storage...')
+  console.log(`⏰ Inicio conexión a Azure Storage: ${new Date().toLocaleString()}`)
   
   try {
     const blobServiceClient = BlobServiceClient.fromConnectionString(
@@ -88,6 +88,7 @@ async function getCaseNumbersFromAzureStorage() {
     const cases = Array.from(caseNumbers).sort()
     console.log(`✅ Encontrados ${cases.length} casos en Azure Storage:`)
     console.log(`   ${cases.join(', ')}`)
+    console.log(`⏰ Fin conexión a Azure Storage: ${new Date().toLocaleString()}`)
     
     return cases
   } catch (error) {
@@ -101,6 +102,7 @@ async function getCaseNumbersFromAzureStorage() {
  */
 async function getStaffByCaseNumber(caseNumber) {
   try {
+    console.log(`⏰ Consultando staff para caso ${caseNumber}: ${new Date().toLocaleString()}`)
     const url = `${SA_API_BASE_URL}/case/staff/byCaseNumber?CaseNumber=${caseNumber}`
     
     if (!smartAdvocateToken) {
@@ -113,7 +115,7 @@ async function getStaffByCaseNumber(caseNumber) {
         'Content-Type': 'application/json'
       }
     })
-    
+ 
     return response.data // Array de usuarios
   } catch (error) {
     if (error.response?.status === 404) {
@@ -215,7 +217,9 @@ async function syncPermissions() {
 
   try {
     // PASO 0: Autenticar en Smart Advocate
+    console.log(`⏰ Inicio conexión a Smart Advocate: ${new Date().toLocaleString()}`)
     await authenticateSmartAdvocate()
+    console.log(`⏰ Fin conexión a Smart Advocate: ${new Date().toLocaleString()}`)
 
     // PASO 1: Obtener lista de casos desde Azure Storage
     const caseNumbers = await getCaseNumbersFromAzureStorage()
@@ -227,6 +231,7 @@ async function syncPermissions() {
 
     // PASO 2: Consultar Smart Advocate por cada caso
     console.log('\n🔍 Consultando Smart Advocate API...')
+    console.log(`⏰ Inicio consulta de casos: ${new Date().toLocaleString()}`)
     const caseStaffMap = {}
     
     for (let i = 0; i < caseNumbers.length; i++) {
@@ -245,6 +250,7 @@ async function syncPermissions() {
         await new Promise(resolve => setTimeout(resolve, 300)) // 300ms entre requests
       }
     }
+    console.log(`⏰ Fin consulta de casos: ${new Date().toLocaleString()}`)
 
     // PASO 3: Invertir estructura y guardar
     const userPermissions = invertPermissionsStructure(caseStaffMap)

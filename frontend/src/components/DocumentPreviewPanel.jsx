@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Document, Page, pdfjs } from 'react-pdf'
+import React, { useState, useEffect, useRef } from 'react'
+import { pdfjs } from 'react-pdf'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
 
@@ -17,11 +17,72 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
     }
   }, [document])
 
+  // 🚀 OPTIMIZADO: Usa blobPath directamente
   const loadDocument = async () => {
     setIsLoading(true)
     setError(null)
 
     try {
+      const tokenParts = token.split('.')
+      const payload = JSON.parse(atob(tokenParts[1]))
+      const sessionId = payload.sessionId
+      const isDev = import.meta.env.DEV
+      const baseUrl = isDev ? 'http://localhost:3001' : ''
+
+      // 🚀 OPTIMIZACIÓN: Si ya viene blobPath, hacer fetch directo
+      if (document.blobPath) {
+        console.log('⚡ Using blobPath from index:', document.blobPath)
+        
+        const metadataResponse = await fetch('/api/documents/get-url', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            filename: document.title,
+            blobPath: document.blobPath,
+          }),
+        })
+
+        const metadata = await metadataResponse.json()
+
+        if (!metadataResponse.ok) {
+          console.error('❌ Error loading document:', metadata.error)
+          
+          // Verificar si es un error de "no encontrado"
+          if (metadata.error && metadata.error.includes('not found')) {
+            throw new Error(`Document not found: ${document.title}\n\nThe file may have been moved or deleted from blob storage.`)
+          }
+          
+          throw new Error(metadata.error || 'Could not load document')
+        }
+
+        // Verificar que tenemos una URL válida
+        if (!metadata.url) {
+          throw new Error('No valid URL returned from server')
+        }
+
+        const proxyUrl = `${baseUrl}/api/proxy/${sessionId}/${encodeURIComponent(
+          metadata.filename
+        )}`
+
+        console.log('✅ Document loaded successfully:', metadata.filename)
+
+        setContent({
+          url: metadata.url,
+          proxyUrl: proxyUrl,
+          metadata: metadata.metadata,
+          blobPath: metadata.blobPath,
+        })
+
+        setIsLoading(false)
+        return
+      }
+
+      // 🐢 FALLBACK: Sin blobPath (casos raros)
+      console.log('🐢 No blobPath, searching by filename...')
+      
       const metadataResponse = await fetch('/api/documents/get-url', {
         method: 'POST',
         headers: {
@@ -36,20 +97,24 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
       const metadata = await metadataResponse.json()
 
       if (!metadataResponse.ok) {
+        console.error('❌ Error loading document:', metadata.error)
+        
+        if (metadata.error && metadata.error.includes('not found')) {
+          throw new Error(`Document not found: ${document.title}\n\nThe file may have been moved or deleted from blob storage.`)
+        }
+        
         throw new Error(metadata.error || 'Could not load document')
       }
 
-      // Decodificar el JWT para obtener el sessionId
-      const tokenParts = token.split('.')
-      const payload = JSON.parse(atob(tokenParts[1]))
-      const sessionId = payload.sessionId
+      if (!metadata.url) {
+        throw new Error('No valid URL returned from server')
+      }
 
-      // Nueva ruta: /api/proxy/:sessionId/:filename
-      const isDev = import.meta.env.DEV
-      const baseUrl = isDev ? 'http://localhost:3001' : ''
       const proxyUrl = `${baseUrl}/api/proxy/${sessionId}/${encodeURIComponent(
-        document.title
+        metadata.filename
       )}`
+
+      console.log('✅ Document loaded successfully:', metadata.filename)
 
       setContent({
         url: metadata.url,
@@ -70,149 +135,75 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
     return document.title.split('.').pop().toLowerCase()
   }
 
-  const handleOpenInOffice = () => {
-    if (content?.url) {
-      const officeUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(
+  const renderContent = () => {
+    if (isLoading || !content) {
+      return (
+        <div className='flex items-center justify-center h-full'>
+          <div className='animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600'></div>
+        </div>
+      )
+    }
+
+    if (content.error) {
+      return (
+        <div className='flex items-center justify-center h-full p-8'>
+          <div className='text-center'>
+            <h3 className='text-lg font-semibold text-red-600 dark:text-red-400'>
+              Error al cargar el documento
+            </h3>
+            <p className='text-sm text-gray-500 dark:text-gray-400 mt-2'>
+              {content.error}
+            </p>
+          </div>
+        </div>
+      )
+    }
+
+    const filename = document.title || 'document'
+    const lowerFilename = filename.toLowerCase()
+
+    const isPdf = lowerFilename.endsWith('.pdf')
+    const isEmail = lowerFilename.endsWith('.msg')
+    const isOfficeDoc = lowerFilename.match(/\.(docx|doc|xlsx|xls|pptx|ppt)$/i)
+
+    if (isEmail) {
+      return <EmailViewer url={content.url} filename={filename} token={token} />
+    }
+
+    if (isOfficeDoc) {
+      const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(
         content.url
       )}`
-      window.open(officeUrl, '_blank')
-    }
-  }
-
-  const renderContent = () => {
-    const ext = getFileExtension()
-
-    if (isLoading) {
       return (
-        <div className='flex items-center justify-center h-full'>
-          <div className='text-center'>
-            <div className='animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4'></div>
-            <p className='text-gray-600 dark:text-gray-400'>
-              Loading document...
-            </p>
-          </div>
-        </div>
-      )
-    }
-
-    if (error) {
-      return (
-        <div className='p-4'>
-          <div className='bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4'>
-            <p className='text-red-800 dark:text-red-200 font-medium mb-2'>
-              ⚠️ Error loading document
-            </p>
-            <p className='text-red-600 dark:text-red-400 text-sm'>{error}</p>
-          </div>
-        </div>
-      )
-    }
-
-    if (!content?.proxyUrl) {
-      return (
-        <div className='flex items-center justify-center h-full'>
-          <p className='text-gray-500 dark:text-gray-400'>
-            No content available
-          </p>
-        </div>
-      )
-    }
-
-    if (ext === 'pdf') {
-      return <PDFViewer url={content.proxyUrl} filename={document.title} />
-    }
-
-    if (ext === 'txt') {
-      return <TextFileViewer url={content.proxyUrl} token={token} />
-    }
-
-    if (ext === 'msg') {
-      return (
-        <EmailViewer
-          url={content.proxyUrl}
-          filename={document.title}
-          token={token}
+        <iframe
+          src={officeViewerUrl}
+          width='100%'
+          height='100%'
+          frameBorder='0'
+          title='Office Document Viewer'
+          className='bg-white'
         />
       )
     }
 
-    if (ext === 'docx' || ext === 'doc') {
-      const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(
-        content.url
-      )}`
-
+    if (isPdf) {
       return (
-        <div className='h-full flex flex-col'>
-          <iframe
-            src={officeViewerUrl}
-            className='w-full flex-1 border-0'
-            title={document.title}
-          />
-          <div className='p-2 bg-gray-100 dark:bg-gray-800 text-xs text-gray-600 dark:text-gray-400 text-center'>
-            💡 Preview powered by Microsoft Office Online
-          </div>
-        </div>
-      )
-    }
-
-    if (ext === 'xlsx' || ext === 'xls') {
-      const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(
-        content.url
-      )}`
-
-      return (
-        <div className='h-full flex flex-col'>
-          <iframe
-            src={officeViewerUrl}
-            className='w-full flex-1 border-0'
-            title={document.title}
-          />
-          <div className='p-2 bg-gray-100 dark:bg-gray-800 text-xs text-gray-600 dark:text-gray-400 text-center'>
-            💡 Preview powered by Microsoft Excel Online
-          </div>
-        </div>
-      )
-    }
-
-    if (
-      ext === 'jpg' ||
-      ext === 'jpeg' ||
-      ext === 'png' ||
-      ext === 'gif' ||
-      ext === 'webp'
-    ) {
-      return (
-        <div className='p-4 flex items-center justify-center h-full bg-gray-100 dark:bg-gray-900'>
-          <img
-            src={content.proxyUrl}
-            alt={document.title}
-            className='max-w-full max-h-full object-contain'
-          />
-        </div>
+        <PDFViewer
+          url={content.url}
+          proxyUrl={content.proxyUrl}
+          filename={filename}
+          searchTerms={document.searchTerms}
+          contextSnippets={document.contextSnippets}
+        />
       )
     }
 
     return (
-      <div className='p-4'>
-        <div className='bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4'>
-          <p className='text-yellow-800 dark:text-yellow-200 font-medium mb-2'>
-            📄 Preview not available
-          </p>
-          <p className='text-yellow-600 dark:text-yellow-400 text-sm mb-3'>
-            Preview is not supported for .{ext} files. You can download the file
-            instead.
-          </p>
-
-          <a
-            href={content.url}
-            download={document.title}
-            target='_blank'
-            className='inline-block px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors'
-          >
-            📥 Download File
-          </a>
-        </div>
-      </div>
+      <TextFileViewer
+        url={content.proxyUrl || content.url}
+        filename={filename}
+        token={token}
+      />
     )
   }
 
@@ -248,7 +239,7 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
           )}
           {content?.blobPath && (
             <p className='text-xs text-gray-400 dark:text-gray-500 mt-1 font-mono truncate'>
-              📁 {content.blobPath}
+              ⚡ {content.blobPath}
             </p>
           )}
         </div>
@@ -278,7 +269,6 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
               const ext = getFileExtension()
               let urlToOpen
 
-              // Para Word/Excel, usar Office Online Viewer
               if (
                 ext === 'docx' ||
                 ext === 'doc' ||
@@ -288,9 +278,7 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
                 urlToOpen = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(
                   content.url
                 )}`
-              }
-              // Para PDF, TXT, imágenes, usar el proxy
-              else {
+              } else {
                 urlToOpen = content.proxyUrl
               }
 
@@ -306,13 +294,59 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
   )
 }
 
-// Componente especializado para PDFs
-function PDFViewer({ url, filename }) {
+// Componente PDF Viewer
+function PDFViewer({ url, filename, searchTerms, contextSnippets, proxyUrl }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [showContext, setShowContext] = useState(true)
+
+  const relevantSnippets =
+    contextSnippets?.filter(
+      (s) =>
+        s.source === filename ||
+        s.source.includes(filename.split('.')[0]) ||
+        filename.includes(s.source.split('.')[0])
+    ) || []
+
+  // 🔥 Usar proxyUrl si existe, sino usar url directa
+  const pdfUrl = proxyUrl || url
+
+  console.log('📄 Loading PDF from:', pdfUrl)
 
   return (
     <div className='h-full flex flex-col bg-gray-100 dark:bg-gray-900'>
+      {relevantSnippets.length > 0 && showContext && (
+        <div className='bg-blue-50 dark:bg-blue-900/30 border-b border-blue-200 dark:border-blue-800 p-3 max-h-48 overflow-y-auto'>
+          <div className='flex items-start justify-between mb-2'>
+            <span className='text-sm font-medium text-blue-800 dark:text-blue-200'>
+              📝 Relevant context found in this document:
+            </span>
+            <button
+              onClick={() => setShowContext(false)}
+              className='text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200'
+            >
+              ✕
+            </button>
+          </div>
+          <div className='space-y-2'>
+            {relevantSnippets.map((snippet, i) => (
+              <div
+                key={i}
+                className='bg-white dark:bg-gray-800 rounded p-2 text-xs'
+              >
+                <p className='text-gray-700 dark:text-gray-300'>
+                  ...{snippet.beforeContext}{' '}
+                  <mark className='bg-yellow-300 dark:bg-yellow-600 px-1 rounded font-semibold'>
+                    {snippet.term}
+                  </mark>{' '}
+                  {snippet.afterContext}...
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {loading && (
         <div className='absolute inset-0 flex items-center justify-center bg-white dark:bg-gray-900 z-10'>
           <div className='text-center'>
@@ -323,10 +357,13 @@ function PDFViewer({ url, filename }) {
       )}
 
       <iframe
-        src={url}
+        src={pdfUrl}
         className='w-full flex-1 border-0'
         title={filename}
-        onLoad={() => setLoading(false)}
+        onLoad={() => {
+          console.log('✅ PDF loaded successfully')
+          setLoading(false)
+        }}
         onError={(e) => {
           console.error('❌ PDF iframe error:', e)
           setError('Failed to load PDF')
@@ -342,6 +379,9 @@ function PDFViewer({ url, filename }) {
                 ⚠️ Error loading PDF
               </p>
               <p className='text-red-600 dark:text-red-400 text-sm'>{error}</p>
+              <p className='text-xs text-gray-600 dark:text-gray-400 mt-2'>
+                Try downloading the file instead.
+              </p>
             </div>
           </div>
         </div>
@@ -350,6 +390,7 @@ function PDFViewer({ url, filename }) {
   )
 }
 
+// Componente Text File Viewer
 function TextFileViewer({ url, token }) {
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(true)
@@ -388,6 +429,7 @@ function TextFileViewer({ url, token }) {
   )
 }
 
+// Componente Email Viewer
 function EmailViewer({ url, filename, token }) {
   const [emailData, setEmailData] = useState(null)
   const [loading, setLoading] = useState(true)

@@ -25,6 +25,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
     setShowExportDropdown,
     exportAsMarkdown,
     exportAsPlainText,
+    exportAsHTML,
     hasValidMessages,
   } = useExportChat(messages, user)
 
@@ -85,12 +86,52 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
       const data = await response.json()
 
       if (response.ok) {
+        // 🔥 OPTIMIZACIÓN: Cargar URLs de TODAS las citations inmediatamente
+        const citationsWithUrls = await Promise.all(
+          (data.citations || []).map(async (citation) => {
+            // Si ya viene con blobPath, no hacer nada
+            if (citation.blobPath) {
+              return citation
+            }
+
+            // Solo para citations sin blobPath, hacer fetch
+            try {
+              const urlResponse = await fetch('/api/documents/get-url', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                  filename: citation.title,
+                  blobPath: citation.blobPath,
+                }),
+              })
+
+              if (urlResponse.ok) {
+                const urlData = await urlResponse.json()
+                return {
+                  ...citation,
+                  blobPath: urlData.blobPath,
+                  url: urlData.url,
+                }
+              }
+            } catch (error) {
+              console.error(`Error loading URL for ${citation.title}:`, error)
+            }
+
+            return citation
+          })
+        )
+
         setMessages((prev) => [
           ...prev,
           {
             role: 'assistant',
             content: data.message,
-            citations: data.citations || [],
+            citations: citationsWithUrls,
+            searchTerms: data.searchTerms || [],
+            contextSnippets: data.contextSnippets || [],
           },
         ])
       } else {
@@ -128,6 +169,8 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
       })
 
       setMessages([])
+      setPreviewPanelOpen(false)
+      setSelectedDocument(null)
       console.log('✅ Chat cleared and thread deleted')
     } catch (error) {
       console.error('Error clearing chat:', error)
@@ -216,7 +259,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
   return (
     <div className='h-screen flex bg-gray-50 dark:bg-gray-900'>
       {/* Contenedor principal del chat con transición */}
-      <div 
+      <div
         className={`flex flex-col flex-1 transition-all duration-300 ease-in-out ${
           previewPanelOpen ? 'mr-[40%]' : 'mr-0'
         }`}
@@ -229,8 +272,8 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
                 ACTS Law RAG
               </h1>
               <p className='text-sm text-gray-600 dark:text-gray-400 mt-1'>
-                User: <span className='font-medium'>{user.name}</span> | Access to
-                cases:{' '}
+                User: <span className='font-medium'>{user.name}</span> | Access
+                to cases:{' '}
                 <span className='font-medium'>{user.cases.join(', ')}</span>
               </p>
             </div>
@@ -260,6 +303,12 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
                       className='w-full text-left px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors rounded-b-md'
                     >
                       📄 Plain Text (.txt)
+                    </button>
+                    <button
+                      onClick={exportAsHTML}
+                      className='w-full text-left px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors rounded-b-md'
+                    >
+                      🌐 HTML (.html)
                     </button>
                   </div>
                 )}
@@ -361,22 +410,21 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
                               showAllCitations[index] ? msg.citations.length : 5
                             )
                             .map((citation, i) => (
-                              <div
+                              <CitationItem
                                 key={i}
-                                className='text-xs bg-gray-50 dark:bg-gray-700/50 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-600/50 transition-colors cursor-pointer'
-                                onClick={() => {
-                                  setSelectedDocument(citation)
+                                index={i}
+                                citation={citation}
+                                token={localStorage.getItem('token')}
+                                onPreview={(enrichedDoc) => {
+                                  setSelectedDocument({
+                                    ...enrichedDoc,
+                                    searchTerms: msg.searchTerms || [],
+                                    contextSnippets: msg.contextSnippets || [],
+                                    chunk: enrichedDoc.chunk,
+                                  })
                                   setPreviewPanelOpen(true)
                                 }}
-                                title='Click to preview document'
-                              >
-                                <div className='font-medium text-gray-900 dark:text-gray-100 flex items-center gap-2'>
-                                  <span className='text-blue-600 dark:text-blue-400'>
-                                    🔗
-                                  </span>
-                                  {i + 1}. {citation.title}
-                                </div>
-                              </div>
+                              />
                             ))}
                           {msg.citations.length > 5 && (
                             <button
@@ -455,6 +503,37 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
           token={localStorage.getItem('token')}
         />
       )}
+    </div>
+  )
+}
+
+// 🚀 SIMPLIFICADO: CitationItem sin carga asíncrona
+const CitationItem = ({ citation, index, onPreview, token }) => {
+  // Ya no necesitamos estado ni useEffect, todo viene del backend
+  const hasBlobPath = !!citation.blobPath
+
+  return (
+    <div className='flex items-start justify-between gap-2 text-xs bg-gray-50 dark:bg-gray-700/50 p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-600/50 transition-colors max-w-full'>
+      <div
+        className='cursor-pointer flex-1 min-w-0'
+        onClick={() => onPreview(citation)}
+        title='Click to preview document'
+      >
+        <div className='font-medium text-gray-900 dark:text-gray-100 flex items-start gap-2 break-words'>
+          <span className='text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5'>
+            {hasBlobPath ? '⚡' : '🔗'}
+          </span>
+          <span>
+            {index + 1}. {citation.title}
+          </span>
+        </div>
+
+        {citation.blobPath && (
+          <div className='text-[10px] text-gray-500 dark:text-gray-400 mt-1 truncate font-mono pl-5'>
+            📁 {citation.blobPath}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
