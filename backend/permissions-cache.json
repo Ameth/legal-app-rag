@@ -11,150 +11,105 @@
       "email": "acohen@actslaw.com",
       "role": "Supervising Partner",
       "phone": "(310) 666-0699",
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "dabir@actslaw.com": {
       "name": "Danny Abir",
       "email": "dabir@actslaw.com",
       "role": "Managing Partner",
       "phone": "(424) 288-4367",
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "accountants@actslaw.com": {
       "name": "Jose Gramajo",
       "email": "accountants@actslaw.com",
       "role": "Accountant",
       "phone": "(424) 288-4367",
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "info@actslaw.com": {
       "name": "Shared Calendar",
       "email": "info@actslaw.com",
       "role": "Calendar",
       "phone": null,
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "ibf@actslaw.com": {
       "name": "IBF Calendar",
       "email": "ibf@actslaw.com",
       "role": "Legal Assistant",
       "phone": null,
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "fai@actslaw.com": {
       "name": "Foundation AI",
       "email": "fai@actslaw.com",
       "role": "Staff",
       "phone": null,
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "ldowney@actslaw.com": {
       "name": "Lindsey Downey",
       "email": "ldowney@actslaw.com",
       "role": "Attorney",
       "phone": "(424) 288-4367",
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "smarcil@actslaw.com": {
       "name": "Suzi Marcil",
       "email": "smarcil@actslaw.com",
       "role": "Paralegal",
       "phone": null,
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "mlanger@actslaw.com": {
       "name": "Michelle Langer",
       "email": "mlanger@actslaw.com",
       "role": "Legal Assistant",
       "phone": null,
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "steichberg@actslaw.com": {
       "name": "Samuel Teichberg",
       "email": "steichberg@actslaw.com",
       "role": "Attorney",
       "phone": "(424) 288-4367",
-      "cases": [
-        "25092",
-        "25096"
-      ]
+      "cases": ["25092", "25096"]
     },
     "kpollack@actslaw.com": {
       "name": "Kevin Pollack",
       "email": "kpollack@actslaw.com",
       "role": "Supervising Attorney",
       "phone": "(424) 288-4367",
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "rjulian@actslaw.com": {
       "name": "Rhys Julian-Jones",
       "email": "rjulian@actslaw.com",
       "role": "Legal Assistant",
       "phone": "(424) 288-4367",
-      "cases": [
-        "25092",
-        "25096",
-        "25160"
-      ]
+      "cases": ["25092", "25096", "25160"]
     },
     "apoberezhskiy@actslaw.com": {
       "name": "Alex Poberezhskiy",
       "email": "apoberezhskiy@actslaw.com",
       "role": "Legal Assistant",
       "phone": "(424) 288-4367",
-      "cases": [
-        "25096",
-        "25160"
-      ]
+      "cases": ["25096", "25160"]
     },
     "achavarria@actslaw.com": {
       "name": "Andrea Chavarria",
       "email": "achavarria@actslaw.com",
       "role": "Legal Assistant",
       "phone": "(424) 288-4367",
-      "cases": [
-        "25160"
-      ]
+      "cases": ["25160"]
+    },
+    "spgroup@actslaw.com": {
+      "name": "Test User",
+      "email": "spgroup@actslaw.com",
+      "role": "Legal Assistant",
+      "phone": "(424) 288-4367",
+      "cases": ["25092", "25096", "25160"]
     }
   }
 }

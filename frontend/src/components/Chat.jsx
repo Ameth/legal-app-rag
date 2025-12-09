@@ -267,15 +267,34 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
         {/* Header */}
         <div className='bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700 px-6 py-4'>
           <div className='max-w-5xl mx-auto flex justify-between items-center'>
-            <div>
-              <h1 className='text-2xl font-bold text-gray-900 dark:text-white'>
-                ACTS Law RAG
-              </h1>
-              <p className='text-sm text-gray-600 dark:text-gray-400 mt-1'>
-                User: <span className='font-medium'>{user.name}</span> | Access
-                to cases:{' '}
-                <span className='font-medium'>{user.cases.join(', ')}</span>
-              </p>
+            <div className='flex items-center gap-3'>
+              {/* Foto del usuario (si está autenticado con Microsoft) */}
+              {user.photoURL && (
+                <img
+                  src={user.photoURL}
+                  alt={user.name}
+                  className='w-10 h-10 rounded-full border-2 border-blue-500 shadow-sm'
+                  onError={(e) => {
+                    // Si falla la carga de la imagen, ocultarla
+                    e.target.style.display = 'none'
+                  }}
+                />
+              )}
+              <div>
+                <h1 className='text-2xl font-bold text-gray-900 dark:text-white'>
+                  ACTS Law RAG
+                </h1>
+                <p className='text-sm text-gray-600 dark:text-gray-400 mt-1'>
+                  User: <span className='font-medium'>{user.name}</span>
+                  {user.photoURL && (
+                    <span className='ml-2 px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-xs font-medium'>
+                      🔐 Microsoft
+                    </span>
+                  )}
+                  {' | '}Access to cases:{' '}
+                  <span className='font-medium'>{user.cases.join(', ')}</span>
+                </p>
+              </div>
             </div>
             <div className='flex gap-3 items-center'>
               <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
@@ -300,7 +319,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
                     </button>
                     <button
                       onClick={exportAsPlainText}
-                      className='w-full text-left px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors rounded-b-md'
+                      className='w-full text-left px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors'
                     >
                       📄 Plain Text (.txt)
                     </button>

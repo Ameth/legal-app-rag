@@ -27,6 +27,7 @@ backend/yarn-debug.log*
 backend/dist/
 backend/build/
 backend/notes-cache.json
+backend/firebase-service-account.json
 
 # ===== FRONTEND =====
 frontend/.env

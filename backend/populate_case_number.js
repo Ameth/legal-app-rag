@@ -9,18 +9,33 @@ const INDEX_NAME = process.env.AZURE_SEARCH_INDEX
 
 /**
  * Extrae el número de caso del parent_id (base64)
+ * Soporta case numbers de 5, 6 o 7 dígitos
  */
 function extractCaseFromParentId(parentId) {
   try {
     const decoded = Buffer.from(parentId, 'base64').toString('utf-8')
 
-    const caseMatch = decoded.match(/\/(\d{5})\//)
-    if (caseMatch) {
+    // Patrón 1: /NNNNN/ o /NNNNNN/ o /NNNNNNN/ (con barras)
+    let caseMatch = decoded.match(/\/(\d{5,7})\//)
+    if (caseMatch && caseMatch[1]) {
       return caseMatch[1]
     }
 
-    const fallbackMatch = decoded.match(/(\d{5})/)
-    if (fallbackMatch) {
+    // Patrón 2: Empieza con 5-7 dígitos seguidos de /
+    caseMatch = decoded.match(/^(\d{5,7})\//)
+    if (caseMatch && caseMatch[1]) {
+      return caseMatch[1]
+    }
+
+    // Patrón 3: Después del container name
+    caseMatch = decoded.match(/testragdocuments\/(\d{5,7})/)
+    if (caseMatch && caseMatch[1]) {
+      return caseMatch[1]
+    }
+
+    // Patrón 4: Fallback - primera secuencia de 5-7 dígitos
+    const fallbackMatch = decoded.match(/(\d{5,7})/)
+    if (fallbackMatch && fallbackMatch[1]) {
       return fallbackMatch[1]
     }
 
@@ -30,12 +45,15 @@ function extractCaseFromParentId(parentId) {
   }
 }
 
-async function populateMissingOnly() {
+async function updateCaseNumbers() {
   try {
-    console.log('🔄 Procesando SOLO documentos SIN case_number...\n')
+    console.log('🔄 Actualizando case_numbers (nuevos y correcciones)...\n')
 
     if (!SEARCH_ENDPOINT || !SEARCH_API_KEY || !INDEX_NAME) {
-      console.error('❌ Faltan variables de entorno')
+      console.error('❌ Faltan variables de entorno:')
+      console.error('   - AZURE_SEARCH_ENDPOINT')
+      console.error('   - AZURE_SEARCH_KEY')
+      console.error('   - AZURE_SEARCH_INDEX')
       return
     }
 
@@ -51,66 +69,51 @@ async function populateMissingOnly() {
 
     let totalProcessed = 0
     let totalUpdated = 0
+    let totalNewCases = 0
+    let totalCorrected = 0
     let totalErrors = 0
-    const batchSize = 100
-    let batch = []
 
-    console.log('📥 Buscando documentos sin case_number...\n')
+    // ========================================
+    // FASE 1: Agregar case_numbers faltantes
+    // ========================================
+    console.log('⏳ Fase 1: Procesando documentos SIN case_number...\n')
 
-    // Buscar solo documentos que NO tienen case_number
-    // Esto reduce dramáticamente la cantidad a procesar
     const missingResults = await searchClient.search('*', {
-      filter: 'case_number eq null', // Solo documentos sin case_number
-      select: ['chunk_id', 'parent_id', 'case_number'],
-      top: 50000, // Azure permite hasta 50k con filtro
+      filter: 'case_number eq null',
+      select: ['chunk_id', 'parent_id'],
+      top: 50000,
     })
 
-    console.log('⏳ Procesando documentos encontrados...\n')
+    let batch = []
+    const batchSize = 100
 
     for await (const result of missingResults.results) {
       totalProcessed++
 
       const doc = result.document
 
-      // Validar que tenga parent_id
       if (!doc.parent_id) {
         totalErrors++
-        if (totalErrors <= 10) {
-          console.log(`   ⚠️  Sin parent_id: ${doc.chunk_id}`)
-        }
         continue
       }
 
-      // Extraer case_number
       const caseNumber = extractCaseFromParentId(doc.parent_id)
 
       if (!caseNumber) {
         totalErrors++
-        if (totalErrors <= 10) {
-          console.log(`   ⚠️  No se pudo extraer caso: ${doc.chunk_id}`)
-        }
         continue
       }
 
-      // Agregar al batch
       batch.push({
         chunk_id: doc.chunk_id,
         case_number: caseNumber,
       })
 
-      // Actualizar en lotes
       if (batch.length >= batchSize) {
         try {
           await searchClient.mergeDocuments(batch)
           totalUpdated += batch.length
-
-          if (totalUpdated % 1000 === 0) {
-            const percentage = Math.round((totalProcessed / 50000) * 100)
-            console.log(
-              `   ✅ Actualizado: ${totalUpdated.toLocaleString()} | Procesados: ${totalProcessed.toLocaleString()} (${percentage}%)`
-            )
-          }
-
+          totalNewCases += batch.length
           batch = []
         } catch (error) {
           console.error(`   ❌ Error en lote: ${error.message}`)
@@ -120,81 +123,220 @@ async function populateMissingOnly() {
       }
     }
 
-    // Actualizar lote final
+    // Lote final de Fase 1
     if (batch.length > 0) {
       try {
         await searchClient.mergeDocuments(batch)
         totalUpdated += batch.length
-        console.log(`\n   ✅ Lote final: ${batch.length} documentos`)
+        totalNewCases += batch.length
+      } catch (error) {
+        console.error(`   ❌ Error en lote final: ${error.message}`)
+        totalErrors += batch.length
+      }
+      batch = []
+    }
+
+    console.log(
+      `   ✅ Fase 1 completada: ${totalNewCases.toLocaleString()} nuevos case_numbers agregados\n`
+    )
+
+    // ========================================
+    // FASE 2: Corregir case_numbers existentes
+    // ========================================
+    console.log(
+      '⏳ Fase 2: Verificando y corrigiendo case_numbers existentes...\n'
+    )
+
+    const existingResults = await searchClient.search('*', {
+      filter: 'case_number ne null',
+      select: ['chunk_id', 'parent_id', 'case_number'],
+      top: 50000,
+    })
+
+    let phase2Processed = 0
+
+    for await (const result of existingResults.results) {
+      phase2Processed++
+
+      const doc = result.document
+
+      if (!doc.parent_id) {
+        continue
+      }
+
+      const correctCaseNumber = extractCaseFromParentId(doc.parent_id)
+
+      if (!correctCaseNumber) {
+        continue
+      }
+
+      // Verificar si necesita corrección
+      if (doc.case_number !== correctCaseNumber) {
+        batch.push({
+          chunk_id: doc.chunk_id,
+          case_number: correctCaseNumber,
+        })
+
+        totalCorrected++
+
+        // Mostrar primeros ejemplos
+        if (totalCorrected <= 5) {
+          console.log(
+            `   🔧 Corrigiendo: "${doc.case_number}" → "${correctCaseNumber}"`
+          )
+        }
+
+        if (batch.length >= batchSize) {
+          try {
+            await searchClient.mergeDocuments(batch)
+            totalUpdated += batch.length
+            batch = []
+          } catch (error) {
+            console.error(`   ❌ Error en lote: ${error.message}`)
+            totalErrors += batch.length
+            batch = []
+          }
+        }
+      }
+
+      // Mostrar progreso cada 10,000
+      if (phase2Processed % 10000 === 0) {
+        console.log(
+          `   📊 Verificados: ${phase2Processed.toLocaleString()} | Corregidos: ${totalCorrected.toLocaleString()}`
+        )
+      }
+    }
+
+    // Lote final de Fase 2
+    if (batch.length > 0) {
+      try {
+        await searchClient.mergeDocuments(batch)
+        totalUpdated += batch.length
       } catch (error) {
         console.error(`   ❌ Error en lote final: ${error.message}`)
         totalErrors += batch.length
       }
     }
 
-    console.log('\n' + '='.repeat(70))
-    console.log('📊 RESUMEN')
+    console.log(
+      `\n   ✅ Fase 2 completada: ${totalCorrected.toLocaleString()} case_numbers corregidos\n`
+    )
+
+    // ========================================
+    // RESUMEN FINAL
+    // ========================================
+    console.log('='.repeat(70))
+    console.log('📊 RESUMEN COMPLETO')
     console.log('='.repeat(70))
     console.log(
-      `📄 Documentos sin case_number encontrados: ${totalProcessed.toLocaleString()}`
+      `📄 Total documentos procesados: ${(
+        totalProcessed + phase2Processed
+      ).toLocaleString()}`
     )
     console.log(
-      `✅ Actualizados exitosamente: ${totalUpdated.toLocaleString()}`
+      `   └─ Fase 1 (sin case_number): ${totalProcessed.toLocaleString()}`
     )
+    console.log(
+      `   └─ Fase 2 (verificación): ${phase2Processed.toLocaleString()}`
+    )
+    console.log('')
+    console.log(`✅ Total actualizaciones: ${totalUpdated.toLocaleString()}`)
+    console.log(`   └─ Nuevos case_numbers: ${totalNewCases.toLocaleString()}`)
+    console.log(
+      `   └─ Case_numbers corregidos: ${totalCorrected.toLocaleString()}`
+    )
+    console.log('')
     console.log(`❌ Errores: ${totalErrors.toLocaleString()}`)
     console.log('='.repeat(70) + '\n')
 
-    if (totalProcessed < 50000) {
-      console.log('✅ ¡PROCESO COMPLETADO!')
+    // Verificar cobertura total
+    console.log('🔍 Verificando cobertura final...\n')
+
+    const allDocs = await searchClient.search('*', {
+      select: ['chunk_id'],
+      top: 0,
+      includeTotalCount: true,
+    })
+
+    const allWithCase = await searchClient.search('*', {
+      filter: 'case_number ne null',
+      select: ['chunk_id'],
+      top: 0,
+      includeTotalCount: true,
+    })
+
+    const total = allDocs.count || 0
+    const withCase = allWithCase.count || 0
+    const coverage = total > 0 ? Math.round((withCase / total) * 100) : 0
+
+    console.log(`   📈 Total documentos: ${total.toLocaleString()}`)
+    console.log(
+      `   ✅ Con case_number: ${withCase.toLocaleString()} (${coverage}%)\n`
+    )
+
+    if (coverage >= 99) {
       console.log(
-        `   Se actualizaron ${totalUpdated.toLocaleString()} documentos que faltaban.\n`
+        '✅ ¡EXCELENTE! Casi todos los documentos tienen case_number correcto'
       )
-
-      // Verificar cobertura total
-      console.log('🔍 Verificando cobertura total...\n')
-
-      const allWithCase = await searchClient.search('*', {
-        filter: 'case_number ne null',
-        select: ['chunk_id'],
-        top: 0,
-        includeTotalCount: true,
-      })
-
-      const totalWithCaseNumber = allWithCase.count || 0
-      const coverage = Math.round((totalWithCaseNumber / 151815) * 100)
-
-      console.log(
-        `📈 Cobertura total: ${totalWithCaseNumber.toLocaleString()} de 151,815 (${coverage}%)\n`
-      )
-
-      if (coverage >= 99) {
-        console.log(
-          '✅ ¡EXCELENTE! Casi todos los documentos tienen case_number'
-        )
-        console.log('\n🚀 Ya puedes usar el sistema:')
-        console.log('   1. cp server-case-number.js server.js')
-        console.log('   2. npm start\n')
-      } else if (coverage >= 95) {
-        console.log('✅ Buena cobertura. El sistema es usable.')
-        console.log('   Algunos documentos pueden no estar disponibles.\n')
-      } else {
-        console.log('⚠️  Aún hay documentos sin case_number')
-        console.log('   Puedes ejecutar este script de nuevo.\n')
-      }
+      console.log('\n🚀 Sistema listo para usar\n')
+    } else if (coverage >= 95) {
+      console.log('✅ Buena cobertura. El sistema es usable.\n')
     } else {
-      console.log('⚠️  Se alcanzó el límite de 50,000 documentos')
-      console.log('   Hay más documentos sin case_number.')
-      console.log('   Ejecuta este script de nuevo para continuar.\n')
+      console.log('⚠️  Ejecuta el script de nuevo para mejorar la cobertura.\n')
     }
 
-    if (totalErrors > 0) {
-      console.log(`ℹ️  ${totalErrors} documentos tuvieron errores`)
-      console.log('   Algunos pueden tener formatos diferentes de parent_id.\n')
+    // Mostrar distribución por longitud
+    console.log('📊 Analizando distribución de case_numbers...\n')
+
+    const sample = await searchClient.search('*', {
+      filter: 'case_number ne null',
+      select: ['case_number'],
+      top: 1000,
+    })
+
+    let count5 = 0,
+      count6 = 0,
+      count7 = 0
+    const uniqueCases = new Set()
+
+    for await (const result of sample.results) {
+      const cn = result.document.case_number
+      if (cn) {
+        uniqueCases.add(cn)
+        const length = cn.length
+        if (length === 5) count5++
+        else if (length === 6) count6++
+        else if (length === 7) count7++
+      }
     }
+
+    console.log('   📌 Distribución por longitud (muestra de 1,000):')
+    console.log(
+      `      5 dígitos: ${count5} (${Math.round((count5 / 1000) * 100)}%)`
+    )
+    console.log(
+      `      6 dígitos: ${count6} (${Math.round((count6 / 1000) * 100)}%)`
+    )
+    console.log(
+      `      7 dígitos: ${count7} (${Math.round((count7 / 1000) * 100)}%)`
+    )
+    console.log(`\n   📌 Casos únicos en muestra: ${uniqueCases.size}`)
+
+    if (uniqueCases.size > 0) {
+      console.log(`   📌 Ejemplos de casos:`)
+      Array.from(uniqueCases)
+        .slice(0, 10)
+        .forEach((c, i) => {
+          console.log(`      ${i + 1}. ${c} (${c.length} dígitos)`)
+        })
+    }
+    console.log()
+
+    console.log('✅ Proceso completado exitosamente!\n')
   } catch (error) {
-    console.error('\n❌ Error:', error.message)
+    console.error('\n❌ Error fatal:', error.message)
     console.error(error.stack)
   }
 }
 
-populateMissingOnly()
+updateCaseNumbers()

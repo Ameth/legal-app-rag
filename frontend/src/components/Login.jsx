@@ -1,6 +1,8 @@
 import React, { useState } from 'react'
 import ThemeToggle from './ThemeToggle'
-import { FaSignInAlt } from "react-icons/fa";
+import { FaSignInAlt } from 'react-icons/fa'
+import { FaMicrosoft } from 'react-icons/fa' // Nuevo icono
+import { signInWithMicrosoft } from '../firebase/config' // Importar función
 
 function Login({ onLogin, theme, toggleTheme }) {
   const [email, setEmail] = useState('')
@@ -36,11 +38,54 @@ function Login({ onLogin, theme, toggleTheme }) {
     }
   }
 
+  // Nueva función para login con Microsoft
+  const handleMicrosoftLogin = async () => {
+    setError('')
+    setLoading(true)
+
+    try {
+      const result = await signInWithMicrosoft()
+
+      if (!result.success) {
+        setError(result.error || 'Error logging in with Microsoft')
+        setLoading(false)
+        return
+      }
+
+      // Obtener el ID token del usuario autenticado
+      const idToken = await result.user.getIdToken()
+
+      // Enviar el token al backend para validación
+      const response = await fetch('/api/auth/microsoft', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ idToken }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.success) {
+        // Autenticación exitosa
+        onLogin(data.user, data.token)
+      } else {
+        // Error de autenticación
+        setError(data.message || data.error || 'Authentication failed')
+      }
+    } catch (err) {
+      console.error('Microsoft login error:', err)
+      setError('Error with Microsoft authentication. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const demoUsers = [
     {
       email: 'acohen@actslaw.com',
       name: 'Alexander Cohen',
-      cases: ['25092', '25096','25160'],
+      cases: ['25092', '25096', '25160'],
     },
     {
       email: 'dabir@actslaw.com',
@@ -66,7 +111,6 @@ function Login({ onLogin, theme, toggleTheme }) {
 
   return (
     <div className='min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800'>
-      {/* Theme Toggle - Posición fija */}
       <div className='fixed top-4 right-4'>
         <ThemeToggle theme={theme} toggleTheme={toggleTheme} />
       </div>
@@ -82,6 +126,30 @@ function Login({ onLogin, theme, toggleTheme }) {
         </div>
 
         <div className='bg-white dark:bg-gray-800 shadow-md rounded-lg p-8'>
+          {/* Botón de Microsoft Login */}
+          <button
+            onClick={handleMicrosoftLogin}
+            disabled={loading}
+            className='w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white py-3 px-4 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-semibold flex items-center justify-center gap-3 border-2 border-gray-200 dark:border-gray-600 shadow-sm hover:shadow-md mb-6'
+          >
+            <div className='w-5 h-5 flex items-center justify-center'>
+              <FaMicrosoft className='text-lg text-[#00A4EF]' />
+            </div>
+            <span>{loading ? 'Signing in...' : 'Sign in with Microsoft'}</span>
+          </button>
+
+          {/* Divisor */}
+          <div className='relative my-6'>
+            <div className='absolute inset-0 flex items-center'>
+              <div className='w-full border-t border-gray-300 dark:border-gray-600'></div>
+            </div>
+            <div className='relative flex justify-center text-sm'>
+              <span className='px-2 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400'>
+                Or continue with email
+              </span>
+            </div>
+          </div>
+
           <form onSubmit={handleSubmit} className='space-y-6'>
             <div>
               <label
@@ -144,7 +212,7 @@ function Login({ onLogin, theme, toggleTheme }) {
                   key={index}
                   onClick={() => {
                     setEmail(user.email)
-                    setPassword('test123') // ← Password temporal
+                    setPassword('test123')
                   }}
                   className='text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors'
                 >

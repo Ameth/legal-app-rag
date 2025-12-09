@@ -16,6 +16,8 @@ import {
   SearchClient,
   AzureKeyCredential as SearchKeyCredential,
 } from '@azure/search-documents'
+import admin from 'firebase-admin'
+import { readFileSync } from 'fs'
 
 dotenv.config()
 
@@ -25,6 +27,24 @@ const PORT = process.env.PORT || 3001
 // Middleware
 app.use(cors())
 app.use(express.json())
+
+// Inicializar Firebase Admin
+try {
+  const serviceAccount = JSON.parse(
+    readFileSync('./firebase-service-account.json', 'utf8')
+  )
+
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  })
+
+  console.log('✅ Firebase Admin initialized successfully')
+} catch (error) {
+  console.error('❌ Error initializing Firebase Admin:', error.message)
+  console.error(
+    '⚠️  Make sure firebase-service-account.json exists in the backend folder'
+  )
+}
 
 // ===== PERMISSIONS MANAGEMENT =====
 const PERMISSIONS_FILE = './permissions-cache.json'
@@ -832,6 +852,104 @@ app.post('/api/login', (req, res) => {
       cases: user.cases,
     },
   })
+})
+
+/**
+ * Microsoft Authentication via Firebase
+ * Verifica el token de Firebase y autentica al usuario
+ */
+app.post('/api/auth/microsoft', async (req, res) => {
+  try {
+    const { idToken } = req.body
+
+    if (!idToken) {
+      return res.status(400).json({ error: 'ID token required' })
+    }
+
+    console.log('\n🔐 Microsoft Authentication Request')
+    console.log('   Verifying Firebase ID token...')
+
+    // Verificar el token con Firebase Admin
+    let decodedToken
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken)
+    } catch (verifyError) {
+      console.error('   ❌ Token verification failed:', verifyError.message)
+      return res.status(401).json({
+        error: 'Invalid or expired token',
+        details: verifyError.message,
+      })
+    }
+
+    const { uid, email, name, picture } = decodedToken
+
+    console.log('   ✅ Token verified successfully')
+    console.log(`   👤 Email: ${email}`)
+    console.log(`   🆔 UID: ${uid}`)
+
+    if (!email) {
+      return res.status(400).json({
+        error: 'Email not found in token',
+      })
+    }
+
+    // Verificar si el usuario tiene permisos en el sistema
+    const normalizedEmail = email.toLowerCase().trim()
+    const user = userPermissions[normalizedEmail]
+
+    if (!user) {
+      console.log('   ❌ User not authorized in system')
+      console.log(`   📧 Attempted email: ${normalizedEmail}`)
+
+      return res.status(403).json({
+        error: 'Access denied',
+        message:
+          'Your email is not authorized to access this system. Please contact your administrator.',
+        email: normalizedEmail,
+      })
+    }
+
+    // Generar sesión y JWT
+    const sessionId = `${normalizedEmail}-${Date.now()}`
+    const token = jwt.sign(
+      {
+        email: normalizedEmail,
+        name: user.name || name || email.split('@')[0],
+        cases: user.cases,
+        sessionId: sessionId,
+        authProvider: 'microsoft',
+        firebaseUid: uid,
+      },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    )
+
+    console.log('   ✅ Authentication successful')
+    console.log(`   👤 User: ${user.name}`)
+    console.log(`   📂 Cases: ${user.cases.join(', ')}`)
+    console.log(`   🔑 Session: ${sessionId}`)
+    console.log(`${'='.repeat(60)}\n`)
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        email: normalizedEmail,
+        name: user.name || name || email.split('@')[0],
+        cases: user.cases,
+        photoURL: picture || null,
+      },
+    })
+  } catch (error) {
+    console.error('\n❌ ERROR in Microsoft authentication:')
+    console.error('Details:', error.message)
+    console.error(`${'='.repeat(60)}\n`)
+
+    res.status(500).json({
+      error: 'Authentication error',
+      details: error.message,
+    })
+  }
 })
 
 // Authentication middleware
