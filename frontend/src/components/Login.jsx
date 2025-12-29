@@ -1,11 +1,12 @@
 import React, { useState } from 'react'
 import ThemeToggle from './ThemeToggle'
 import { FaSignInAlt } from 'react-icons/fa'
-import { FaMicrosoft } from 'react-icons/fa' // Nuevo icono
-import { signInWithMicrosoft } from '../firebase/config' // Importar función
+import { FaMicrosoft } from 'react-icons/fa'
+import { signInWithMicrosoft } from '../firebase/config'
 
 function Login({ onLogin, theme, toggleTheme }) {
-  const [email, setEmail] = useState('')
+  // CAMBIO 1: Estado para username en vez de email
+  const [username, setUsername] = useState('') 
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -21,7 +22,8 @@ function Login({ onLogin, theme, toggleTheme }) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password }),
+        // CAMBIO 2: Enviamos username y password
+        body: JSON.stringify({ username, password }),
       })
 
       const data = await response.json()
@@ -38,76 +40,35 @@ function Login({ onLogin, theme, toggleTheme }) {
     }
   }
 
-  // Nueva función para login con Microsoft
   const handleMicrosoftLogin = async () => {
+    // ... (Esta función queda igual, el login de Microsoft sigue siendo útil)
     setError('')
     setLoading(true)
-
     try {
       const result = await signInWithMicrosoft()
-
       if (!result.success) {
-        setError(result.error || 'Error logging in with Microsoft')
-        setLoading(false)
-        return
+         setError(result.error || 'Error logging in')
+         setLoading(false)
+         return
       }
-
-      // Obtener el ID token del usuario autenticado
       const idToken = await result.user.getIdToken()
-
-      // Enviar el token al backend para validación
       const response = await fetch('/api/auth/microsoft', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idToken }),
       })
-
       const data = await response.json()
-
       if (response.ok && data.success) {
-        // Autenticación exitosa
         onLogin(data.user, data.token)
       } else {
-        // Error de autenticación
-        setError(data.message || data.error || 'Authentication failed')
+        setError(data.message || 'Authentication failed')
       }
     } catch (err) {
-      console.error('Microsoft login error:', err)
-      setError('Error with Microsoft authentication. Please try again.')
+      setError('Error with Microsoft authentication')
     } finally {
       setLoading(false)
     }
   }
-
-  const demoUsers = [
-    {
-      email: 'acohen@actslaw.com',
-      name: 'Alexander Cohen',
-      cases: ['25092', '25096', '25160'],
-    },
-    {
-      email: 'dabir@actslaw.com',
-      name: 'Danny Abir',
-      cases: ['25092', '25096'],
-    },
-    {
-      email: 'ldowney@actslaw.com',
-      name: 'Lindsey Downey',
-      cases: ['25092', '25096'],
-    },
-    {
-      email: 'apoberezhskiy@actslaw.com',
-      name: 'Alex Poberezhskiy',
-      cases: ['25096'],
-    },
-    {
-      email: 'steichberg@actslaw.com',
-      name: 'Samuel Teichberg',
-      cases: ['25092', '25096'],
-    },
-  ]
 
   return (
     <div className='min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800'>
@@ -118,34 +79,30 @@ function Login({ onLogin, theme, toggleTheme }) {
       <div className='max-w-md w-full space-y-8'>
         <div className='text-center'>
           <h1 className='text-4xl font-bold text-gray-900 dark:text-white mb-2'>
-            ACTS Law RAG
+            ACTS Law AI 🤖
           </h1>
           <p className='text-gray-600 dark:text-gray-400'>
-            Legal query system with access control
+            Smart Advocate Integration
           </p>
         </div>
 
         <div className='bg-white dark:bg-gray-800 shadow-md rounded-lg p-8'>
-          {/* Botón de Microsoft Login */}
           <button
             onClick={handleMicrosoftLogin}
             disabled={loading}
-            className='w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white py-3 px-4 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 font-semibold flex items-center justify-center gap-3 border-2 border-gray-200 dark:border-gray-600 shadow-sm hover:shadow-md mb-6'
+            className='w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white py-3 px-4 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 border-2 border-gray-200 dark:border-gray-600 shadow-sm mb-6 flex items-center justify-center gap-3'
           >
-            <div className='w-5 h-5 flex items-center justify-center'>
-              <FaMicrosoft className='text-lg text-[#00A4EF]' />
-            </div>
-            <span>{loading ? 'Signing in...' : 'Sign in with Microsoft'}</span>
+             <FaMicrosoft className='text-[#00A4EF]' />
+             <span>Sign in with Microsoft</span>
           </button>
 
-          {/* Divisor */}
           <div className='relative my-6'>
             <div className='absolute inset-0 flex items-center'>
               <div className='w-full border-t border-gray-300 dark:border-gray-600'></div>
             </div>
             <div className='relative flex justify-center text-sm'>
-              <span className='px-2 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400'>
-                Or continue with email
+              <span className='px-2 bg-white dark:bg-gray-800 text-gray-500'>
+                Or sign in with SA User
               </span>
             </div>
           </div>
@@ -153,19 +110,20 @@ function Login({ onLogin, theme, toggleTheme }) {
           <form onSubmit={handleSubmit} className='space-y-6'>
             <div>
               <label
-                htmlFor='email'
+                htmlFor='username'
                 className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'
               >
-                Email
+                SA Username
               </label>
+              {/* CAMBIO 3: Input de Username */}
               <input
-                id='email'
-                type='email'
+                id='username'
+                type='text'
                 required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white'
-                placeholder='user@actslaw.com'
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white'
+                placeholder='Username'
               />
             </div>
 
@@ -182,13 +140,13 @@ function Login({ onLogin, theme, toggleTheme }) {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white'
+                className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white'
                 placeholder='••••••••'
               />
             </div>
 
             {error && (
-              <div className='bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm'>
+              <div className='bg-red-50 dark:bg-red-900/30 border border-red-200 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm'>
                 {error}
               </div>
             )}
@@ -196,36 +154,12 @@ function Login({ onLogin, theme, toggleTheme }) {
             <button
               type='submit'
               disabled={loading}
-              className='w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:bg-blue-300 dark:disabled:bg-blue-800 disabled:cursor-not-allowed transition-colors font-medium flex items-center justify-center gap-2'
+              className='w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition-colors font-medium flex items-center justify-center gap-2'
             >
-              {loading ? 'Signing in...' : 'Sign In'} <FaSignInAlt />
+              {loading ? 'Verifying...' : 'Sign In'} <FaSignInAlt />
             </button>
           </form>
 
-          <div className='mt-6 pt-6 border-t border-gray-200 dark:border-gray-700'>
-            <p className='text-sm text-gray-600 dark:text-gray-400 mb-3 font-medium'>
-              Demo users (password: password123):
-            </p>
-            <div className='space-y-2'>
-              {demoUsers.map((user, index) => (
-                <div
-                  key={index}
-                  onClick={() => {
-                    setEmail(user.email)
-                    setPassword('test123')
-                  }}
-                  className='text-sm bg-gray-50 dark:bg-gray-700 p-2 rounded cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors'
-                >
-                  <span className='font-medium text-blue-600 dark:text-blue-400'>
-                    {user.name || user.email}
-                  </span>
-                  <span className='text-gray-500 dark:text-gray-400 text-xs ml-2'>
-                    (Cases: {user.cases.join(', ')})
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
     </div>

@@ -110,6 +110,13 @@
       "role": "Legal Assistant",
       "phone": "(424) 288-4367",
       "cases": ["25092", "25096", "25160"]
+    },
+    "aordonez@nedugatech.com": {
+      "name": "Ameth Ordonez",
+      "email": "aordonez@nedugatech.com",
+      "role": "Legal Assistant",
+      "phone": "(424) 288-4367",
+      "cases": ["25092", "25096", "25160"]
     }
   }
 }
