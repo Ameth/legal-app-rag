@@ -29,46 +29,54 @@ const PORT = process.env.PORT || 3001
 app.use(cors())
 app.use(express.json())
 
-// Inicializar Firebase Admin
+// ===== FIREBASE INITIALIZATION =====
 try {
-  const serviceAccount = JSON.parse(
-    readFileSync('./firebase-service-account.json', 'utf8')
-  )
+  let serviceAccount
+  // Opción A: Si existe la variable de entorno (PRODUCCIÓN)
+  if (process.env.FIREBASE_CONFIG_JSON) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG_JSON)
+    console.log('✅ Firebase config loaded from Environment Variable')
+  }
+  // Opción B: Si no, busca el archivo local (DESARROLLO)
+  else {
+    serviceAccount = JSON.parse(
+      readFileSync('./firebase-service-account.json', 'utf8')
+    )
+    console.log('✅ Firebase config loaded from local file')
+  }
 
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
   })
-
   console.log('✅ Firebase Admin initialized successfully')
 } catch (error) {
   console.error('❌ Error initializing Firebase Admin:', error.message)
-  console.error(
-    '⚠️  Make sure firebase-service-account.json exists in the backend folder'
-  )
 }
 
 // ===== AZURE AI FOUNDRY CONFIGURATION =====
 const AZURE_AI_PROJECT_ENDPOINT = process.env.AZURE_AI_PROJECT_ENDPOINT
 const AZURE_AGENT_ID = process.env.AZURE_AGENT_ID
-const AZURE_AI_PROJECT_KEY = process.env.AZURE_AI_PROJECT_KEY
+const AZURE_VECTOR_STORE_ID = process.env.AZURE_VECTOR_STORE_ID 
 
-let aiProjectClient
+let aiProjectClient;
+
 try {
-  if (AZURE_AI_PROJECT_KEY) {
-    aiProjectClient = new AIProjectClient(
-      AZURE_AI_PROJECT_ENDPOINT,
-      new AzureKeyCredential(AZURE_AI_PROJECT_KEY)
-    )
-    console.log('✅ Azure AI Foundry client initialized with API Key')
-  } else {
-    aiProjectClient = new AIProjectClient(
-      AZURE_AI_PROJECT_ENDPOINT,
-      new DefaultAzureCredential()
-    )
-    console.log(
-      '✅ Azure AI Foundry client initialized with DefaultAzureCredential'
-    )
+  // Validación simple
+  if (!AZURE_AI_PROJECT_ENDPOINT) {
+    throw new Error('❌ Falta la variable AZURE_AI_PROJECT_ENDPOINT')
   }
+
+  // Inicialización con URL (Soluciona 'Invalid URL' y 'agents/read')
+  console.log(
+    `🔵 Conectando a Foundry: ${AZURE_AI_PROJECT_ENDPOINT.substring(0, 30)}...`
+  )
+
+  aiProjectClient = new AIProjectClient(
+    AZURE_AI_PROJECT_ENDPOINT,
+    new DefaultAzureCredential()
+  )
+
+  console.log('✅ Azure AI Foundry client initialized via Project Endpoint')
 } catch (error) {
   console.error('❌ Error initializing Azure AI Foundry client:', error.message)
 }
@@ -101,7 +109,7 @@ try {
   )
 }
 
-// ===== AZURE SEARCH CONFIGURATION (NUEVO) =====
+// ===== AZURE SEARCH CONFIGURATION =====
 const AZURE_SEARCH_ENDPOINT = process.env.AZURE_SEARCH_ENDPOINT
 const AZURE_SEARCH_KEY = process.env.AZURE_SEARCH_KEY
 const AZURE_SEARCH_INDEX = process.env.AZURE_SEARCH_INDEX
@@ -114,9 +122,7 @@ try {
       AZURE_SEARCH_INDEX,
       new SearchKeyCredential(AZURE_SEARCH_KEY)
     )
-    console.log(
-      '✅ Azure Search client initialized for instant document lookup'
-    )
+    console.log('✅ Azure Search client initialized for document lookup')
   } else {
     console.warn(
       '⚠️  Azure Search credentials not found - using fallback search'
@@ -128,7 +134,9 @@ try {
 
 // ===== UTILITIES =====
 const JWT_SECRET = process.env.JWT_SECRET
-const userThreads = new Map()
+
+// Store threads with their associated case filters
+const userThreads = new Map() // sessionId -> { threadId, cases }
 
 function getContentType(filename) {
   const ext = filename.split('.').pop().toLowerCase()
@@ -149,26 +157,76 @@ function getContentType(filename) {
   return contentTypes[ext] || 'application/octet-stream'
 }
 
-async function getOrCreateThread(sessionId) {
-  if (userThreads.has(sessionId)) {
-    console.log(`   ♻️  Reusing existing thread: ${userThreads.get(sessionId)}`)
-    return userThreads.get(sessionId)
+/**
+ * 🔒 Generate OData filter for Azure Search
+ * This is the PRIMARY security mechanism
+ */
+function generateCaseNumberFilter(userCases) {
+  if (userCases.includes('*')) {
+    console.log('   🔓 Admin access - no filter applied')
+    return null
+  }
+
+  // Generate: case_number eq '25096' or case_number eq '25097' ...
+  const filters = userCases.map((caseNum) => `case_number eq '${caseNum}'`)
+  const filterString = filters.join(' or ')
+
+  console.log(`   🔒 Case filter (OData): ${filterString}`)
+  return filterString
+}
+
+/**
+ * 🧵 Get or create thread with case-level filtering
+ * CRITICAL: Thread is scoped to user's authorized cases
+ */
+async function getOrCreateThread(sessionId, userCases) {
+  const threadInfo = userThreads.get(sessionId)
+
+  // Check if existing thread matches current user cases
+  if (threadInfo) {
+    const casesMatch =
+      threadInfo.cases.length === userCases.length &&
+      threadInfo.cases.every((c) => userCases.includes(c))
+
+    if (casesMatch) {
+      console.log(`   ♻️  Reusing thread: ${threadInfo.threadId}`)
+      return threadInfo.threadId
+    } else {
+      // Cases changed - delete old thread and create new one
+      console.log(`   🔄 Cases changed - creating new thread`)
+      await deleteThread(sessionId)
+    }
   }
 
   console.log('   🆕 Creating new thread...')
+
+  const searchFilter = generateCaseNumberFilter(userCases)
+
+  // For Azure AI Search tool (not vector store), thread is created without tool_resources
+  // Filtering will be applied via additional_instructions in the run
   const thread = await aiProjectClient.agents.threads.create()
-  userThreads.set(sessionId, thread.id)
+
+  // Store thread with associated cases
+  userThreads.set(sessionId, {
+    threadId: thread.id,
+    cases: [...userCases],
+    filter: searchFilter,
+    createdAt: new Date(),
+  })
+
   console.log(`   ✅ Thread created: ${thread.id}`)
+  console.log(`   📂 Authorized cases: ${userCases.join(', ')}`)
+
   return thread.id
 }
 
 async function deleteThread(sessionId) {
-  if (userThreads.has(sessionId)) {
-    const threadId = userThreads.get(sessionId)
+  const threadInfo = userThreads.get(sessionId)
+  if (threadInfo) {
     try {
-      await aiProjectClient.agents.threads.delete(threadId)
+      await aiProjectClient.agents.threads.delete(threadInfo.threadId)
       userThreads.delete(sessionId)
-      console.log(`   🗑️  Thread deleted: ${threadId}`)
+      console.log(`   🗑️  Thread deleted: ${threadInfo.threadId}`)
       return true
     } catch (error) {
       console.error(`   ⚠️  Error deleting thread: ${error.message}`)
@@ -180,24 +238,7 @@ async function deleteThread(sessionId) {
 }
 
 /**
- * 🔥 Genera filtro OData usando el campo case_number
- */
-function generateCaseNumberFilter(userCases) {
-  if (userCases.includes('*')) {
-    console.log('   🔓 Admin access - no filter needed')
-    return null
-  }
-
-  const filters = userCases.map((caseNum) => `case_number eq '${caseNum}'`)
-  const filterString = filters.join(' or ')
-
-  console.log(`   🔒 Case filter: ${filterString}`)
-  return filterString
-}
-
-/**
- * 🚀 Obtener blobPath desde Azure Search Index usando el título
- * Búsqueda flexible que maneja variaciones en nombres
+ * 🔍 Get blob path from Azure Search Index
  */
 async function getBlobPathFromIndex(filename) {
   if (!searchClient) {
@@ -208,16 +249,16 @@ async function getBlobPathFromIndex(filename) {
   try {
     console.log(`   🔍 Searching index for: "${filename}"`)
 
-    // Extraer palabras clave del filename (sin extensión, sin números, sin caracteres especiales)
+    // Extract keywords from filename
     const keywords = filename
-      .replace(/\.(pdf|docx?|xlsx?|msg|txt)$/i, '') // Quitar extensión
-      .replace(/[_\-]/g, ' ') // Reemplazar guiones/underscores por espacios
-      .replace(/\d{4}-\d{2}-\d{2}/g, '') // Quitar fechas YYYY-MM-DD
-      .replace(/\d{2}-\d{2}-\d{2}/g, '') // Quitar fechas MM-DD-YY
-      .replace(/\d{8}/g, '') // Quitar fechas YYYYMMDD
+      .replace(/\.(pdf|docx?|xlsx?|msg|txt)$/i, '')
+      .replace(/[_\-]/g, ' ')
+      .replace(/\d{4}-\d{2}-\d{2}/g, '')
+      .replace(/\d{2}-\d{2}-\d{2}/g, '')
+      .replace(/\d{8}/g, '')
       .split(/\s+/)
-      .filter((word) => word.length >= 4 && !/^\d+$/.test(word)) // Palabras >= 4 chars, no solo números
-      .slice(0, 5) // Tomar las 5 primeras palabras importantes
+      .filter((word) => word.length >= 4 && !/^\d+$/.test(word))
+      .slice(0, 5)
       .join(' ')
       .trim()
 
@@ -228,13 +269,12 @@ async function getBlobPathFromIndex(filename) {
 
     console.log(`   🔑 Keywords: "${keywords}"`)
 
-    // Búsqueda con las palabras clave
     const searchResults = await searchClient.search(keywords, {
       searchFields: ['title'],
       select: ['url', 'title'],
-      top: 10, // Aumentar resultados para mejor chance
+      top: 10,
       queryType: 'simple',
-      searchMode: 'any', // Buscar cualquier palabra clave
+      searchMode: 'any',
     })
 
     let bestMatch = null
@@ -242,15 +282,10 @@ async function getBlobPathFromIndex(filename) {
 
     for await (const result of searchResults.results) {
       const docTitle = result.document.title || ''
-
-      console.log(`      📄 Result: "${docTitle}" | Score: ${result.score}`)
-
-      // Calcular similitud simple
       const docTitleLower = docTitle.toLowerCase()
       const filenameLower = filename.toLowerCase()
       const keywordsArray = keywords.toLowerCase().split(/\s+/)
 
-      // Contar cuántas palabras clave coinciden
       let matches = 0
       for (const keyword of keywordsArray) {
         if (docTitleLower.includes(keyword)) {
@@ -271,23 +306,15 @@ async function getBlobPathFromIndex(filename) {
     }
 
     if (bestMatch && bestScore >= 0.5) {
-      // Al menos 50% de coincidencia
-      // 🔧 LIMPIAR el blobPath antes de retornarlo
-      let cleanPath = bestMatch.url
-
-      // 1. Decodificar URL encoding (%20 → espacio, etc.)
-      cleanPath = decodeURIComponent(cleanPath)
-
-      // 2. Quitar caracteres extra al final (números solos, puntos, etc.)
-      cleanPath = cleanPath.replace(/[0-9]+$/, '') // Quitar números al final
-      cleanPath = cleanPath.replace(/\.+$/, '') // Quitar puntos al final
+      let cleanPath = decodeURIComponent(bestMatch.url)
+      cleanPath = cleanPath.replace(/[0-9]+$/, '').replace(/\.+$/, '')
 
       console.log(
         `   ⚡ Found match (${Math.round(bestScore * 100)}%): "${
           bestMatch.title
         }"`
       )
-      console.log(`   ⚡ BlobPath (cleaned): ${cleanPath}`)
+      console.log(`   ⚡ BlobPath: ${cleanPath}`)
 
       return cleanPath
     }
@@ -303,15 +330,13 @@ async function getBlobPathFromIndex(filename) {
 }
 
 /**
- * 🐢 FALLBACK: Búsqueda tradicional en Blob Storage (solo si falla el índice)
- * Mantener solo para casos edge donde el índice no tenga el documento
+ * 🐢 FALLBACK: Search in Blob Storage if index lookup fails
  */
 async function findDocumentInStorage(filename, userCases, containerClient) {
   console.log(`\n🔍 FALLBACK: Searching in Blob Storage for: "${filename}"`)
 
   const casesToSearch = userCases.includes('*') ? [''] : userCases
 
-  // Búsqueda exacta por nombre
   for (const userCase of casesToSearch) {
     try {
       for await (const blob of containerClient.listBlobsFlat({
@@ -337,262 +362,264 @@ async function findDocumentInStorage(filename, userCases, containerClient) {
 }
 
 /**
- * Ejecutar conversación del agente con filtrado por case_number
+ * 🤖 Run agent conversation with filtered RAG
+ *
+ * Security Layers:
+ * 1. Thread-level vector store filtering (PRIMARY)
+ * 2. Runtime instructions reinforcement (SECONDARY)
+ * 3. Post-processing validation (SAFETY NET)
  */
 async function runAgentConversation(threadId, userMessage, userCases) {
   try {
-    // 1️⃣ Generar filtro técnico (Azure Search)
-    const searchFilter = generateCaseNumberFilter(userCases)
-
-    // Preparar Set de casos permitidos para validación lógica (Node.js)
-    const allowedCasesSet = new Set(userCases.includes('*') ? [] : userCases)
     const isAdmin = userCases.includes('*')
+    let toolRetrievedDocuments = []
 
-    // 2️⃣ Instrucciones de seguridad para el Prompt (Capa 1 de defensa)
-    const securityInstructions = isAdmin
-      ? ''
-      : `CRITICAL SECURITY RULE: You are authorized to access ONLY documents where the file path starts with one of these case numbers: [${userCases.join(
-          ', '
-        )}].
-         The document paths in the index follow the format: "CaseNumber/Category/FileName".
-         If a search result path starts with a different number (e.g., "25096/..."), IGNORE IT completely. 
-         Do not reveal information from unauthorized cases.`
-
-    const contextMessage = `${securityInstructions}\n\nUser Question: ${userMessage}`
-
-    await aiProjectClient.agents.messages.create(
-      threadId,
-      'user',
-      contextMessage
-    )
-    console.log('   📩 Message added to thread')
-
-    // 3️⃣ Opciones de ejecución
-    const runOptions = {
-      additional_instructions: securityInstructions,
+    // 1️⃣ Definición de la Herramienta
+    const searchToolDefinition = {
+      type: 'function',
+      function: {
+        name: 'search_legal_documents',
+        description:
+          'Search for information within the authorized legal cases. Use this tool whenever you need to find facts, dates, names, or details from the documents.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description:
+                'The search query keywords to find relevant information.',
+            },
+          },
+          required: ['query'],
+        },
+      },
     }
 
-    if (searchFilter) {
-      try {
-        runOptions.tool_resources = {
-          file_search: { filter: searchFilter },
-        }
-        console.log('   🔒 Applied case_number filter (Request layer)')
-      } catch (error) {
-        console.warn('   ⚠️  Could not apply filter:', error.message)
-      }
-    }
+    // 2️⃣ Enviar mensaje
+    await aiProjectClient.agents.messages.create(threadId, 'user', userMessage)
+    console.log('   📩 Message added to thread')
 
-    // 4️⃣ Ejecutar Agente
+    const allowedList = userCases.join(', ')
+
+    // 3️⃣ Iniciar Ejecución
     let run = await aiProjectClient.agents.runs.create(
       threadId,
       AZURE_AGENT_ID,
-      runOptions
+      {
+        tools: [searchToolDefinition],
+        additional_instructions: `
+        CURRENT SECURITY CONTEXT:
+        - The user is AUTHORIZED for the following Case Numbers: [${allowedList}].
+        - The search tool 'search_legal_documents' is SECURE and PRE-FILTERED by the system.
+        
+        OPERATIONAL RULES:
+        1. ALWAYS use the tool 'search_legal_documents' to find information.
+        2. TRUST THE TOOL: If the tool returns results, you are authorized to use them.
+        3. RESPONSE STYLE: Answer naturally. Do NOT use bracketed citations like [1] or [2] in your text.
+        4. If the tool returns empty results, inform the user that no information was found.
+        `,
+      }
     )
-    console.log(`   🏃 Run started: ${run.id}`)
+    console.log(`   🏃 Run started: ${run.id}`)
 
-    // Polling
+    // 4️⃣ Polling
     let iterations = 0
     const maxIterations = 60
-    while (run.status === 'queued' || run.status === 'in_progress') {
+
+    while (true) {
       await new Promise((resolve) => setTimeout(resolve, 1000))
       run = await aiProjectClient.agents.runs.get(threadId, run.id)
       iterations++
+
       if (iterations >= maxIterations) throw new Error('Agent run timeout')
+
+      // CASO A: Requires Action
+      if (run.status === 'requires_action') {
+        console.log('   ⚙️  Agent requires action (Function Call)...')
+
+        // Leemos con seguridad (Optional Chaining)
+        const toolCalls = run.requiredAction?.submitToolOutputs?.toolCalls
+
+        if (!toolCalls) {
+          console.error('   ❌ Error: Tool calls are undefined')
+          break
+        }
+
+        const toolOutputs = []
+
+        for (const toolCall of toolCalls) {
+          if (toolCall.function.name === 'search_legal_documents') {
+            const args = JSON.parse(toolCall.function.arguments)
+            const query = args.query
+
+            console.log(
+              `   🔎 Tool Executing: search_legal_documents(query="${query}")`
+            )
+
+            let searchResultText = 'No results found.'
+
+            if (searchClient) {
+              const filter = isAdmin
+                ? null
+                : userCases.map((c) => `case_number eq '${c}'`).join(' or ')
+
+              const searchResults = await searchClient.search(query, {
+                filter: filter,
+                select: ['title', 'chunk', 'url', 'case_number'],
+                top: 5,
+                queryType: 'semantic',
+                queryLanguage: 'en-us',
+                semanticConfiguration:
+                  'ai-search-1761858591800-small-semantic-configuration',
+              })
+
+              let resultsBuffer = []
+              let docIndex = 1
+
+              for await (const result of searchResults.results) {
+                const docInfo = {
+                  title: result.document.title,
+                  blobPath: decodeURIComponent(result.document.url),
+                  content: result.document.chunk,
+                  case: result.document.case_number,
+                }
+                toolRetrievedDocuments.push(docInfo)
+
+                resultsBuffer.push(`
+                Title: ${result.document.title}
+                Case: ${result.document.case_number}
+                Content: ${result.document.chunk}
+                -----------------------------------
+                `)
+                docIndex++
+              }
+
+              if (resultsBuffer.length > 0) {
+                searchResultText = resultsBuffer.join('\n')
+                console.log(
+                  `   ✅ Found ${resultsBuffer.length} docs. Passed to Agent.`
+                )
+              }
+            }
+
+            // 🔥 CORRECCIÓN CRÍTICA: Enviar AMBOS formatos
+            // Esto asegura que si el SDK busca uno u otro, siempre encuentre el ID.
+            toolOutputs.push({
+              tool_call_id: toolCall.id, // Formato API REST (snake_case)
+              toolCallId: toolCall.id, // Formato SDK JS (camelCase)
+              output: searchResultText,
+            })
+          }
+        }
+
+        if (toolOutputs.length > 0) {
+          // Enviamos el array directo
+          await aiProjectClient.agents.runs.submitToolOutputs(
+            threadId,
+            run.id,
+            toolOutputs
+          )
+          console.log('   📤 Tool outputs submitted successfully')
+        }
+      }
+
+      if (run.status === 'completed') {
+        console.log('   ✅ Run completed.')
+        break
+      }
+
+      if (run.status === 'failed' || run.status === 'cancelled') {
+        throw new Error(`Run failed: ${run.lastError?.message || run.status}`)
+      }
     }
 
-    if (run.status === 'failed') {
-      throw new Error(
-        `Agent run failed: ${run.lastError?.message || 'Unknown error'}`
-      )
-    }
-
-    // 5️⃣ Obtener Mensaje del Asistente
+    // 5️⃣ Respuesta Final
     const messagesResponse = await aiProjectClient.agents.messages.list(
       threadId,
       { order: 'desc', limit: 1 }
     )
-    let assistantMessage = ''
-    let messageAnnotations = []
 
+    let assistantMessage = ''
     for await (const message of messagesResponse) {
       if (message.role === 'assistant') {
-        for (const content of message.content) {
-          if (content.type === 'text') {
-            assistantMessage = content.text.value
-            if (content.text.annotations)
-              messageAnnotations = content.text.annotations
-          }
+        if (
+          message.content &&
+          message.content.length > 0 &&
+          message.content[0].text
+        ) {
+          assistantMessage = message.content[0].text.value
         }
         break
       }
     }
 
-    // =========================================================
-    // 🚨 FIREWALL & KILL SWITCH (Capa 2 de defensa)
-    // =========================================================
-    console.log('   🛡️ Validating citations and security...')
-
-    let citations = []
-    let detectedUnauthorizedAccess = false
-    let unauthorizedCaseDetected = null
-
-    if (messageAnnotations.length > 0) {
-      for (const annotation of messageAnnotations) {
-        try {
-          // A. Identificar Título
-          let docTitle = ''
-          if (annotation.type === 'url_citation' && annotation.urlCitation) {
-            docTitle = annotation.urlCitation.title
-          } else if (
-            annotation.type === 'file_citation' &&
-            annotation.file_citation
-          ) {
-            const quote = annotation.file_citation.quote || ''
-            const match = quote.match(
-              /\b\d{5}_\d{8}_\d+\.txt\b|\b[\w-]+\.(txt|pdf|msg|docx)\b/i
-            )
-            docTitle = match ? match[0] : quote.substring(0, 50)
-          } else if (annotation.type === 'file_path' && annotation.file_path) {
-            docTitle = annotation.file_path.file_id
-          }
-
-          // B. Obtener ruta real del índice
-          const realBlobPath = await getBlobPathFromIndex(docTitle || 'unknown')
-
-          // C. VALIDACIÓN ESTRICTA
-          if (realBlobPath) {
-            const pathParts = realBlobPath.split('/')
-            const docCase = pathParts[0] // Ej: "25096"
-
-            // Si es un número de caso y NO está en la lista permitida
-            if (/^\d+$/.test(docCase)) {
-              if (!isAdmin && !allowedCasesSet.has(docCase)) {
-                console.error(
-                  `   ⛔ SECURITY ALERT: Agent accessed unauthorized Case ${docCase}!`
-                )
-                detectedUnauthorizedAccess = true
-                unauthorizedCaseDetected = docCase
-                // ACTIVAMOS EL KILL SWITCH: Romper el bucle inmediatamente.
-                break
-              }
-            }
-          }
-
-          // Si llegamos aquí, la cita es segura. La procesamos.
-          let citationInfo = {
-            title: docTitle,
-            blobPath: realBlobPath,
-            content: 'Authorized content',
-            chunk: '',
-          }
-
-          if (
-            annotation.startIndex !== undefined &&
-            annotation.endIndex !== undefined
-          ) {
-            const s = Math.max(0, annotation.startIndex - 200)
-            const e = Math.min(
-              assistantMessage.length,
-              annotation.endIndex + 200
-            )
-            citationInfo.chunk = assistantMessage
-              .substring(s, e)
-              .replace(/【[^】]*】/g, '')
-              .trim()
-          }
-
-          citations.push(citationInfo)
-        } catch (e) {
-          console.error('Annotation error:', e.message)
-        }
-      }
-    }
-
-    // 7️⃣ PREPARAR RESPUESTA FINAL
     let cleanMessage = assistantMessage.replace(/【[^】]*】/g, '').trim()
 
-    // 🔥 KILL SWITCH ACTIVADO 🔥
-    // Si se detectó acceso ilegal, sobrescribimos la respuesta del agente.
-    if (detectedUnauthorizedAccess) {
-      console.error(
-        `   ☢️ KILL SWITCH EXECUTED: Wiping response to prevent Case ${unauthorizedCaseDetected} leakage.`
-      )
+    // 6️⃣ Citations
+    const uniqueCitationsMap = new Map()
+    toolRetrievedDocuments.forEach((doc) => {
+      if (doc.blobPath && !uniqueCitationsMap.has(doc.blobPath)) {
+        uniqueCitationsMap.set(doc.blobPath, {
+          title: doc.title,
+          blobPath: doc.blobPath,
+          content: doc.content,
+          chunk: doc.content,
+        })
+      }
+    })
 
-      cleanMessage =
-        `⚠️ **Access Denied to Information**\n\n` +
-        `I apologize, but I cannot answer this specific question because the relevant documents belong to **Case ${unauthorizedCaseDetected}**, which you are not authorized to view.\n\n` +
-        `Your access is strictly limited to cases: [${userCases.join(', ')}].`
+    const finalCitations = Array.from(uniqueCitationsMap.values())
 
-      citations = [] // Borramos todas las citas para no dejar rastro.
-    }
-
-    // 8️⃣ Lógica auxiliar (snippets, términos)
-    // Solo ejecutamos si NO hubo bloqueo de seguridad para ahorrar recursos
-    let searchTerms = []
-    let contextSnippets = []
-
-    if (!detectedUnauthorizedAccess) {
-      // ... (Tu lógica original de snippets, la incluimos aquí simplificada) ...
-      // Puedes volver a pegar tu función 'extractSearchTermsFromChunks' y 'extractContextSnippets'
-      // aquí dentro si las necesitas para el frontend.
-    }
-
-    console.log(
-      `   ✅ Response ready with ${citations.length} citations (Blocked: ${detectedUnauthorizedAccess})`
-    )
+    console.log(`   ✅ Response ready with ${finalCitations.length} citations.`)
 
     return {
       message: cleanMessage,
-      citations: citations,
-      searchTerms: searchTerms,
-      contextSnippets: contextSnippets,
+      citations: finalCitations,
       securityInfo: {
-        appliedFilter: searchFilter !== null,
-        blockedUnauthorizedCitations: detectedUnauthorizedAccess,
+        filterApplied: true,
+        toolUsed: toolRetrievedDocuments.length > 0,
+        citationsReturned: finalCitations.length,
       },
     }
   } catch (error) {
-    console.error('   ❌ Error in agent conversation:', error.message)
+    console.error('   ❌ Error in agent conversation:', error.message)
     throw error
   }
 }
 
-// ===== GESTIÓN DE PERMISOS EN MEMORIA =====
-// Ahora guardamos dos índices para búsquedas rápidas
+// ===== PERMISSIONS CACHE =====
 let permissionsCache = {
-  byUserId: {}, // Mapa: userID (int) -> { info... }
-  byEmail: {}, // Mapa: email (string) -> { info... }
+  byUserId: {},
+  byEmail: {},
   lastSync: null,
   isSyncing: false,
 }
 
 const SA_API_BASE_URL = process.env.SA_API_BASE_URL
-// Estos son los credenciales del "System User" para hacer el Sync en background
 const SA_SYSTEM_USERNAME = process.env.SA_USERNAME
 const SA_SYSTEM_PASSWORD = process.env.SA_PASSWORD
 
 /**
- * 🔄 SINCRONIZACIÓN AUTOMÁTICA (Background)
- * Consulta Azure y luego pregunta a SA quién está en esos casos.
+ * 🔄 Sync permissions from Smart Advocate
  */
 async function syncPermissions() {
   if (permissionsCache.isSyncing) return
   permissionsCache.isSyncing = true
-  console.log('\n🔄 [SYNC] Iniciando sincronización de permisos...')
+  console.log('\n🔄 [SYNC] Starting permissions sync...')
 
   try {
-    // 1. Autenticar Usuario de Sistema (para poder consultar la API)
+    // Authenticate
     const authRes = await axios.post(`${SA_API_BASE_URL}/Users/authenticate`, {
       Username: SA_SYSTEM_USERNAME,
       Password: SA_SYSTEM_PASSWORD,
     })
     const serviceToken = authRes.data.token
-    console.log('   ✅ [SYNC] Autenticado como sistema')
+    console.log('   ✅ [SYNC] System authenticated')
 
-    // 2. Obtener lista de casos desde Azure
+    // Get case numbers from Azure
     if (!AZURE_STORAGE_CONNECTION_STRING)
-      throw new Error('Falta connection string')
+      throw new Error('Missing connection string')
+
     const blobServiceClient = BlobServiceClient.fromConnectionString(
       AZURE_STORAGE_CONNECTION_STRING
     )
@@ -600,41 +627,34 @@ async function syncPermissions() {
       blobServiceClient.getContainerClient(AZURE_CONTAINER_NAME)
 
     const caseNumbers = new Set()
-    // Listamos blobs para ver qué carpetas de casos existen
     for await (const blob of containerClient.listBlobsFlat()) {
-      const parts = blob.name.split('/') // asume estructura "21546/archivo.pdf"
+      const parts = blob.name.split('/')
       if (parts.length > 0 && /^\d+$/.test(parts[0])) {
         caseNumbers.add(parts[0])
       }
     }
     const casesList = Array.from(caseNumbers)
-    console.log(`   📂 [SYNC] Casos encontrados en Azure: ${casesList.length}`)
+    console.log(`   📂 [SYNC] Found ${casesList.length} cases in Azure`)
 
-    // 3. Consultar Staff en SA caso por caso
+    // Query staff for each case
     const tempByUserId = {}
     const tempByEmail = {}
 
-    // Procesamos secuencialmente para no matar la API de SA (puedes paralelizar con p-limit si es lento)
     let processed = 0
     for (const caseNum of casesList) {
       try {
         const staffRes = await axios.get(
           `${SA_API_BASE_URL}/case/staff/byCaseNumber?CaseNumber=${caseNum}`,
-          {
-            headers: { Authorization: `Bearer ${serviceToken}` },
-          }
+          { headers: { Authorization: `Bearer ${serviceToken}` } }
         )
 
-        const staffList = staffRes.data // Array de objetos usuario
+        const staffList = staffRes.data
 
         if (Array.isArray(staffList)) {
           staffList.forEach((staff) => {
-            // staff = { userID: 814, firstName: "AI", email: "...", ... }
-
             const uid = staff.userID
             const email = staff.email ? staff.email.toLowerCase().trim() : null
 
-            // Inicializar objeto si no existe
             if (uid && !tempByUserId[uid]) {
               tempByUserId[uid] = {
                 name: `${staff.firstName} ${staff.lastName}`,
@@ -644,35 +664,32 @@ async function syncPermissions() {
               }
             }
 
-            // Agregar caso al usuario por ID
             if (uid && !tempByUserId[uid].cases.includes(caseNum)) {
               tempByUserId[uid].cases.push(caseNum)
             }
 
-            // Mapeo también por email (para Microsoft Login)
             if (email) {
-              // Referenciamos al mismo objeto para ahorrar memoria
               tempByEmail[email] = tempByUserId[uid]
             }
           })
         }
       } catch (e) {
-        // Ignorar 404s o errores puntuales de casos
+        // Ignore individual case errors
       }
+
       processed++
-      if (processed % 20 === 0)
-        console.log(`     ... procesados ${processed}/${casesList.length}`)
+      if (processed % 20 === 0) {
+        console.log(`     ... processed ${processed}/${casesList.length}`)
+      }
     }
 
-    // 4. Guardar en caché
+    // Update cache
     permissionsCache.byUserId = tempByUserId
     permissionsCache.byEmail = tempByEmail
     permissionsCache.lastSync = new Date()
 
     console.log(
-      `✅ [SYNC] Completado. Usuarios indexados: ${
-        Object.keys(tempByUserId).length
-      }`
+      `✅ [SYNC] Completed. Users indexed: ${Object.keys(tempByUserId).length}`
     )
   } catch (error) {
     console.error('❌ [SYNC] Error:', error.message)
@@ -681,24 +698,26 @@ async function syncPermissions() {
   }
 }
 
-// Ejecutar sincronización al iniciar y cada hora
+// Run sync on startup and every hour
 syncPermissions()
 setInterval(syncPermissions, 60 * 60 * 1000)
 
-// ===== ENDPOINTS =====
+// ===== API ENDPOINTS =====
 
-// Login
+/**
+ * Login endpoint (Smart Advocate credentials)
+ */
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body // Recibimos 'username', NO 'email'
+  const { username, password } = req.body
 
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password required' })
   }
 
   try {
-    console.log(`🔐 Intentando login SA para usuario: ${username}`)
+    console.log(`🔐 Login attempt: ${username}`)
 
-    // 1. Autenticar credenciales contra Smart Advocate
+    // Authenticate against Smart Advocate
     let authData
     try {
       const saResponse = await axios.post(
@@ -709,46 +728,41 @@ app.post('/api/login', async (req, res) => {
         }
       )
       authData = saResponse.data
-      // authData = { "userID": 814, "token": "...", "username": "OpenAI" }
     } catch (e) {
-      console.log(`   ❌ SA rechazó credenciales: ${e.message}`)
+      console.log(`   ❌ SA rejected credentials`)
       return res.status(401).json({ error: 'Invalid username or password' })
     }
 
     if (!authData || !authData.userID) {
-      return res
-        .status(401)
-        .json({ error: 'Authentication failed (No UserID)' })
+      return res.status(401).json({ error: 'Authentication failed' })
     }
 
     const saUserID = authData.userID
-    console.log(`   ✅ Auth exitosa. SA UserID: ${saUserID}`)
+    console.log(`   ✅ Authenticated. SA UserID: ${saUserID}`)
 
-    // 2. Buscar permisos en nuestra caché usando el UserID
+    // Get permissions from cache
     const userProfile = permissionsCache.byUserId[saUserID]
 
     let userCases = []
     let displayName = username
-    let userEmail = `${username}@actslaw.com` // Fallback si no hay email
+    let userEmail = `${username}@actslaw.com`
 
     if (userProfile) {
       userCases = userProfile.cases || []
       displayName = userProfile.name || username
       userEmail = userProfile.email || userEmail
-      console.log(`   📂 Casos encontrados en caché: ${userCases.length}`)
+      console.log(`   📂 Cases: ${userCases.length}`)
     } else {
-      console.log(
-        `   ⚠️ Usuario autenticado pero sin casos asignados en caché (o sync pendiente).`
-      )
+      console.log(`   ⚠️  User authenticated but no cases assigned`)
     }
 
-    // 3. Generar Token
+    // Generate JWT
     const sessionId = `${username}-${Date.now()}`
     const token = jwt.sign(
       {
-        email: userEmail, // Usamos el email para consistencia interna
-        saUsername: username, // Guardamos el username original
-        saUserID: saUserID, // Guardamos el ID de SA
+        email: userEmail,
+        saUsername: username,
+        saUserID: saUserID,
         name: displayName,
         cases: userCases,
         sessionId: sessionId,
@@ -773,7 +787,6 @@ app.post('/api/login', async (req, res) => {
 
 /**
  * Microsoft Authentication via Firebase
- * Verifica el token de Firebase y autentica al usuario
  */
 app.post('/api/auth/microsoft', async (req, res) => {
   try {
@@ -784,9 +797,7 @@ app.post('/api/auth/microsoft', async (req, res) => {
     }
 
     console.log('\n🔐 Microsoft Authentication Request')
-    console.log('   Verifying Firebase ID token...')
 
-    // Verificar el token con Firebase Admin
     let decodedToken
     try {
       decodedToken = await admin.auth().verifyIdToken(idToken)
@@ -800,33 +811,27 @@ app.post('/api/auth/microsoft', async (req, res) => {
 
     const { uid, email, name, picture } = decodedToken
 
-    console.log('   ✅ Token verified successfully')
+    console.log('   ✅ Token verified')
     console.log(`   👤 Email: ${email}`)
-    console.log(`   🆔 UID: ${uid}`)
 
     if (!email) {
-      return res.status(400).json({
-        error: 'Email not found in token',
-      })
+      return res.status(400).json({ error: 'Email not found in token' })
     }
 
-    // Verificar si el usuario tiene permisos en el sistema
+    // Check permissions cache
     const normalizedEmail = email.toLowerCase().trim()
-    const user = userPermissions[normalizedEmail]
+    const user = permissionsCache.byEmail[normalizedEmail]
 
     if (!user) {
-      console.log('   ❌ User not authorized in system')
-      console.log(`   📧 Attempted email: ${normalizedEmail}`)
-
+      console.log('   ❌ User not authorized')
       return res.status(403).json({
         error: 'Access denied',
-        message:
-          'Your email is not authorized to access this system. Please contact your administrator.',
+        message: 'Your email is not authorized. Contact your administrator.',
         email: normalizedEmail,
       })
     }
 
-    // Generar sesión y JWT
+    // Generate session
     const sessionId = `${normalizedEmail}-${Date.now()}`
     const token = jwt.sign(
       {
@@ -844,8 +849,6 @@ app.post('/api/auth/microsoft', async (req, res) => {
     console.log('   ✅ Authentication successful')
     console.log(`   👤 User: ${user.name}`)
     console.log(`   📂 Cases: ${user.cases.join(', ')}`)
-    console.log(`   🔑 Session: ${sessionId}`)
-    console.log(`${'='.repeat(60)}\n`)
 
     res.json({
       success: true,
@@ -858,10 +861,7 @@ app.post('/api/auth/microsoft', async (req, res) => {
       },
     })
   } catch (error) {
-    console.error('\n❌ ERROR in Microsoft authentication:')
-    console.error('Details:', error.message)
-    console.error(`${'='.repeat(60)}\n`)
-
+    console.error('Microsoft auth error:', error.message)
     res.status(500).json({
       error: 'Authentication error',
       details: error.message,
@@ -869,7 +869,9 @@ app.post('/api/auth/microsoft', async (req, res) => {
   }
 })
 
-// Authentication middleware
+/**
+ * Authentication middleware
+ */
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization']
   const token = authHeader && authHeader.split(' ')[1]
@@ -887,7 +889,9 @@ function authenticateToken(req, res, next) {
   })
 }
 
-// Chat endpoint
+/**
+ * Chat endpoint - Main conversation interface
+ */
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
     const { message, clearThread } = req.body
@@ -909,27 +913,33 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       await deleteThread(sessionId)
     }
 
-    const threadId = await getOrCreateThread(sessionId)
+    // Get or create thread with case filtering
+    const threadId = await getOrCreateThread(sessionId, userCases)
     const response = await runAgentConversation(threadId, message, userCases)
 
-    console.log(
-      `✅ Response ready with ${response.citations.length} citations\n`
-    )
+    console.log(`✅ Response ready with ${response.citations.length} citations`)
+
+    if (response.securityInfo.unauthorizedAccessDetected) {
+      console.warn(
+        `⚠️  Security validation triggered - review Azure filter configuration`
+      )
+    }
 
     res.json(response)
   } catch (error) {
     console.error('\n❌ ERROR in /api/chat:')
     console.error('Details:', error.message)
-    console.error(`${'='.repeat(60)}\n`)
 
     res.status(500).json({
-      error: 'Error processing query with agent',
+      error: 'Error processing query',
       details: error.message,
     })
   }
 })
 
-// Clear chat
+/**
+ * Clear chat thread
+ */
 app.post('/api/chat/clear', authenticateToken, async (req, res) => {
   try {
     const sessionId = req.user.sessionId
@@ -950,7 +960,9 @@ app.post('/api/chat/clear', authenticateToken, async (req, res) => {
   }
 })
 
-// Verify user permissions
+/**
+ * Verify user permissions
+ */
 app.get('/api/me', authenticateToken, (req, res) => {
   res.json({
     email: req.user.email,
@@ -959,50 +971,16 @@ app.get('/api/me', authenticateToken, (req, res) => {
   })
 })
 
-// Reload permissions
-app.post('/api/admin/reload-permissions', authenticateToken, (req, res) => {
-  if (!req.user.cases.includes('*')) {
-    return res.status(403).json({ error: 'Admin access required' })
-  }
-
-  reloadPermissions()
-
-  res.json({
-    message: 'Permissions reloaded successfully',
-    metadata: permissionsMetadata,
-    totalUsers: Object.keys(userPermissions).length,
-  })
-})
-
-// Permissions info
-app.get('/api/admin/permissions-info', authenticateToken, (req, res) => {
-  if (!req.user.cases.includes('*')) {
-    return res.status(403).json({ error: 'Admin access required' })
-  }
-
-  res.json({
-    metadata: permissionsMetadata,
-    totalUsers: Object.keys(userPermissions).length,
-    users: Object.entries(userPermissions).map(([email, data]) => ({
-      email,
-      name: data.name,
-      role: data.role,
-      casesCount: data.cases.length,
-      cases: data.cases,
-    })),
-  })
-})
-
-// 🚀 OPTIMIZED: Get document URL (usa índice primero, fallback después)
+/**
+ * Get document URL with SAS token
+ */
 app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
   try {
     const { filename, blobPath } = req.body
     const userCases = req.user.cases
 
     if (!containerClient) {
-      return res.status(503).json({
-        error: 'Azure Storage not configured',
-      })
+      return res.status(503).json({ error: 'Azure Storage not configured' })
     }
 
     console.log(`\n📄 Getting document: ${filename}`)
@@ -1011,7 +989,7 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
     let blobClient = null
     let source = 'unknown'
 
-    // ESTRATEGIA 1: Si viene blobPath del chat (desde el índice), usarlo directamente
+    // Strategy 1: Use blobPath from citation (index)
     if (finalBlobPath) {
       console.log(`   ⚡ Using blobPath from index: ${finalBlobPath}`)
       blobClient = containerClient.getBlobClient(finalBlobPath)
@@ -1019,30 +997,27 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
       try {
         const exists = await blobClient.exists()
         if (exists) {
-          console.log(`   ✅ Found instantly via index!`)
+          console.log(`   ✅ Found via index`)
           source = 'index-direct'
         } else {
-          console.log(`   ⚠️  Blob not found at indexed path, trying search...`)
           finalBlobPath = null
         }
       } catch (e) {
-        console.warn(`   ⚠️  Error checking blob:`, e.message)
         finalBlobPath = null
       }
     }
 
-    // ESTRATEGIA 2: Buscar en el índice por título
+    // Strategy 2: Search index by title
     if (!finalBlobPath && filename && searchClient) {
-      console.log(`   🔍 Searching in Azure Search Index...`)
+      console.log(`   🔍 Searching index...`)
       finalBlobPath = await getBlobPathFromIndex(filename)
 
       if (finalBlobPath) {
         blobClient = containerClient.getBlobClient(finalBlobPath)
-
         try {
           const exists = await blobClient.exists()
           if (exists) {
-            console.log(`   ✅ Found via index search!`)
+            console.log(`   ✅ Found via index search`)
             source = 'index-search'
           } else {
             finalBlobPath = null
@@ -1053,9 +1028,9 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
       }
     }
 
-    // ESTRATEGIA 3: FALLBACK - búsqueda en Blob Storage (solo si falla todo)
+    // Strategy 3: Fallback to blob storage search
     if (!finalBlobPath && filename) {
-      console.log(`   🐢 Using fallback blob search...`)
+      console.log(`   🐢 Using fallback search`)
       const result = await findDocumentInStorage(
         filename,
         userCases,
@@ -1074,7 +1049,7 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
       })
     }
 
-    // Verificar permisos
+    // Verify permissions
     const pathCaseMatch = finalBlobPath.match(/^(\d{5})/)
     const actualCase = pathCaseMatch ? pathCaseMatch[1] : null
 
@@ -1091,7 +1066,7 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
       })
     }
 
-    // Generar SAS URL
+    // Generate SAS URL
     const properties = await blobClient.getProperties()
     const connectionParts = AZURE_STORAGE_CONNECTION_STRING.split(';')
     const accountName = connectionParts
@@ -1123,9 +1098,7 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
     const actualFilename = finalBlobPath.split('/').pop()
     const correctContentType = getContentType(actualFilename)
 
-    const sourceEmoji =
-      source === 'index-direct' || source === 'index-search' ? '⚡' : '🐢'
-    console.log(`   ${sourceEmoji} SAS URL generated (via ${source})\n`)
+    console.log(`   ✅ SAS URL generated (via ${source})`)
 
     res.json({
       filename: actualFilename,
@@ -1150,192 +1123,10 @@ app.post('/api/documents/get-url', authenticateToken, async (req, res) => {
   }
 })
 
-// Proxy endpoint para servir documentos
-app.get('/api/proxy/:sessionId/:filename', async (req, res) => {
-  try {
-    const { sessionId, filename: encodedFilename } = req.params
-    const filename = decodeURIComponent(encodedFilename)
-
-    console.log(`\n📄 PROXY REQUEST`)
-    console.log(`   📁 File: ${filename}`)
-    console.log(`   🔑 Session: ${sessionId}`)
-
-    if (!sessionId) {
-      console.log(`   ❌ No session ID provided`)
-      return res.status(401).json({ error: 'Session required' })
-    }
-
-    let userEmail = null
-    let userCases = []
-
-    for (const [session, threadId] of userThreads.entries()) {
-      if (
-        session.startsWith(sessionId.split('-')[0]) &&
-        session.includes(sessionId)
-      ) {
-        userEmail = sessionId.split('-').slice(0, -1).join('-')
-        break
-      }
-    }
-
-    if (!userEmail) {
-      const emailPart = sessionId.substring(0, sessionId.lastIndexOf('-'))
-      if (userPermissions[emailPart]) {
-        userEmail = emailPart
-        userCases = userPermissions[emailPart].cases
-      }
-    } else {
-      userCases = userPermissions[userEmail]?.cases || []
-    }
-
-    if (!userEmail || !userCases.length) {
-      console.log(`   ❌ Invalid or expired session`)
-      return res.status(403).json({ error: 'Invalid session' })
-    }
-
-    console.log(`   👤 User: ${userEmail}`)
-    console.log(`   📂 Cases: ${userCases.join(', ')}`)
-
-    if (!containerClient) {
-      return res.status(503).json({
-        error: 'Azure Storage not configured',
-      })
-    }
-
-    // Buscar usando el índice primero
-    let blobPath = await getBlobPathFromIndex(filename)
-    let blobClient = null
-
-    if (blobPath) {
-      console.log(`   ⚡ Found via index: ${blobPath}`)
-      blobClient = containerClient.getBlobClient(blobPath)
-
-      const exists = await blobClient.exists()
-      if (!exists) {
-        console.log(`   ⚠️  Blob doesn't exist, using fallback`)
-        blobPath = null
-      }
-    }
-
-    // Fallback a búsqueda tradicional
-    if (!blobPath) {
-      console.log(`   🐢 Using fallback search`)
-      const result = await findDocumentInStorage(
-        filename,
-        userCases,
-        containerClient
-      )
-      blobPath = result.blobPath
-      blobClient = result.blobClient
-    }
-
-    if (!blobPath || !blobClient) {
-      console.log(`   ❌ File not found`)
-      return res.status(404).json({ error: 'Document not found' })
-    }
-
-    const pathCaseMatch = blobPath.match(/^(\d{5})/)
-    const actualCase = pathCaseMatch ? pathCaseMatch[1] : null
-
-    if (
-      actualCase &&
-      !userCases.includes('*') &&
-      !userCases.includes(actualCase)
-    ) {
-      console.log(`   ❌ Access denied`)
-      return res.status(403).json({ error: 'Access denied' })
-    }
-
-    const properties = await blobClient.getProperties()
-    const fileSize = properties.contentLength
-    const actualFilename = blobPath.split('/').pop()
-    const correctContentType = getContentType(actualFilename)
-
-    const range = req.headers.range
-
-    if (range) {
-      const parts = range.replace(/bytes=/, '').split('-')
-      const start = parseInt(parts[0], 10)
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
-      const chunkSize = end - start + 1
-
-      const downloadResponse = await blobClient.download(start, chunkSize)
-
-      res.status(206)
-      res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`)
-      res.setHeader('Accept-Ranges', 'bytes')
-      res.setHeader('Content-Length', chunkSize)
-      res.setHeader('Content-Type', correctContentType)
-      res.setHeader('Access-Control-Allow-Origin', '*')
-      res.setHeader(
-        'Access-Control-Expose-Headers',
-        'Content-Range, Content-Length, Content-Type, Accept-Ranges'
-      )
-
-      downloadResponse.readableStreamBody.pipe(res)
-    } else {
-      const downloadResponse = await blobClient.download()
-
-      res.setHeader('Access-Control-Allow-Origin', '*')
-      res.setHeader('Content-Type', correctContentType)
-      res.setHeader('Content-Length', fileSize)
-      res.setHeader(
-        'Content-Disposition',
-        `inline; filename="${actualFilename}"`
-      )
-      res.setHeader('Accept-Ranges', 'bytes')
-      res.setHeader('Cache-Control', 'public, max-age=3600')
-
-      downloadResponse.readableStreamBody.pipe(res)
-    }
-
-    console.log(`   ✅ Proxy complete`)
-  } catch (error) {
-    console.error('❌ Proxy error:', error.message)
-    res.status(500).json({
-      error: 'Error loading document',
-      details: error.message,
-    })
-  }
-})
-
-// Health check
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    permissions: {
-      loaded: Object.keys(userPermissions).length > 0,
-      totalUsers: Object.keys(userPermissions).length,
-      lastSync: permissionsMetadata.lastSync,
-      mode: permissionsMetadata.mode || 'PRODUCTION',
-    },
-    agent: {
-      endpoint: AZURE_AI_PROJECT_ENDPOINT,
-      agentId: AZURE_AGENT_ID,
-      activeThreads: userThreads.size,
-    },
-    search: {
-      enabled: !!searchClient,
-      endpoint: AZURE_SEARCH_ENDPOINT || 'not configured',
-      index: AZURE_SEARCH_INDEX || 'not configured',
-      status: searchClient ? '⚡ instant lookup enabled' : '🐢 fallback only',
-    },
-    optimization: {
-      instantDocumentLoad: !!searchClient,
-      fallbackAvailable: true,
-    },
-    security: {
-      filterType: 'case_number (Azure Search)',
-      validationLayer: 'DISABLED - trusting Azure filter',
-    },
-  })
-})
-
-// ===== ENDPOINT PARA FORZAR LA SINCRONIZACIÓN MANUALMENTE =====
-// Llámalo cuando asignes un caso nuevo y necesites que se refleje YA.
+/**
+ * Force permissions sync (admin only)
+ */
 app.post('/api/admin/force-sync', async (req, res) => {
-  // Opcional: Proteger esto con un secret header simple para que nadie más lo llame
   const adminSecret = req.headers['x-admin-secret']
   if (adminSecret !== 'Asdf1234$') {
     return res.status(403).json({ error: 'Unauthorized' })
@@ -1343,44 +1134,38 @@ app.post('/api/admin/force-sync', async (req, res) => {
 
   if (permissionsCache.isSyncing) {
     return res.status(409).json({
-      message: '⚠️ Ya hay una sincronización en curso, espera unos segundos.',
+      message: 'Sync already in progress',
     })
   }
 
-  console.log('⚡ Forzando sincronización manual por petición HTTP...')
+  console.log('⚡ Force sync requested')
 
-  // Ejecutamos la sync (no esperamos a que termine para responder al cliente si queremos que sea rápido,
-  // pero mejor usamos await para confirmar que se hizo).
   try {
     await syncPermissions()
     res.json({
       success: true,
-      message: '✅ Sincronización completada exitosamente.',
+      message: 'Sync completed successfully',
       stats: {
         totalUsers: Object.keys(permissionsCache.byUserId).length,
         timestamp: new Date(),
       },
     })
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: 'Falló la sincronización manual', details: error.message })
+    res.status(500).json({
+      error: 'Sync failed',
+      details: error.message,
+    })
   }
 })
 
-// ===== ENDPOINT PARA INSPECCIONAR EL CACHÉ (DEBUG) =====
+/**
+ * Cache status (debug endpoint)
+ */
 app.get('/api/admin/cache-status', (req, res) => {
-  // Opcional: Si quieres restringirlo solo a tu usuario admin
-  // if (req.user.email !== 'tu-email@actslaw.com') {
-  //   return res.status(403).json({ error: 'Solo administradores pueden ver esto' });
-  // }
-
   try {
-    // Calculamos estadísticas rápidas
     const userIds = Object.keys(permissionsCache.byUserId)
     const emails = Object.keys(permissionsCache.byEmail)
 
-    // Transformamos el objeto a un array más legible para la respuesta JSON
     const readableUsers = userIds.map((id) => {
       const user = permissionsCache.byUserId[id]
       return {
@@ -1407,29 +1192,60 @@ app.get('/api/admin/cache-status', (req, res) => {
       },
       stats: {
         totalUsersById: userIds.length,
-        totalUsersByEmail: emails.length, // Debería ser igual o menor si hay emails null
+        totalUsersByEmail: emails.length,
       },
-      // Mostramos la data formateada
       data: readableUsers,
     })
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: 'Error leyendo caché', details: error.message })
+    res.status(500).json({
+      error: 'Error reading cache',
+      details: error.message,
+    })
   }
 })
 
+/**
+ * Health check
+ */
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    permissions: {
+      totalUsers: Object.keys(permissionsCache.byUserId).length,
+      lastSync: permissionsCache.lastSync,
+    },
+    agent: {
+      endpoint: AZURE_AI_PROJECT_ENDPOINT,
+      agentId: AZURE_AGENT_ID,
+      vectorStore: AZURE_VECTOR_STORE_ID || 'not configured',
+      activeThreads: userThreads.size,
+    },
+    search: {
+      enabled: !!searchClient,
+      endpoint: AZURE_SEARCH_ENDPOINT || 'not configured',
+      index: AZURE_SEARCH_INDEX || 'not configured',
+    },
+    security: {
+      primaryFilter: 'Thread-level vector store filtering',
+      secondaryFilter: 'Runtime instructions',
+      safetyNet: 'Post-processing validation',
+      approach: 'Defense in depth',
+    },
+  })
+})
+
+// ===== START SERVER =====
 app.listen(PORT, () => {
   console.log(`\n${'='.repeat(60)}`)
-  console.log(`🚀 ACTS Law RAG Backend (OPTIMIZED)`)
+  console.log(`🚀 ACTS Law RAG Backend`)
   console.log(`${'='.repeat(60)}`)
   console.log(`📍 Server: http://localhost:${PORT}`)
   console.log(`🤖 Agent: ${AZURE_AGENT_ID}`)
-  console.log(`🔒 Security: Azure Search filtering`)
+  console.log(`🗄️  Vector Store: ${AZURE_VECTOR_STORE_ID || 'not configured'}`)
+  console.log(`🔒 Security: Multi-layer defense`)
   console.log(
-    `⚡ Optimization: ${
-      searchClient ? 'Instant lookup ENABLED' : 'Fallback only'
-    }`
+    `⚡ Optimization: ${searchClient ? 'Index enabled' : 'Fallback only'}`
   )
   console.log(`${'='.repeat(60)}\n`)
 })

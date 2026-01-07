@@ -7,7 +7,8 @@ import dotenv from 'dotenv'
 dotenv.config()
 
 // ===== CONFIGURACIÓN =====
-const AZURE_STORAGE_CONNECTION_STRING = process.env.AZURE_STORAGE_CONNECTION_STRING
+const AZURE_STORAGE_CONNECTION_STRING =
+  process.env.AZURE_STORAGE_CONNECTION_STRING
 const AZURE_CONTAINER_NAME = process.env.AZURE_CONTAINER_NAME
 const SA_API_BASE_URL = process.env.SA_API_BASE_URL
 const SA_USERNAME = process.env.SA_USERNAME
@@ -24,9 +25,11 @@ let smartAdvocateToken = null
  */
 async function authenticateSmartAdvocate() {
   console.log('🔐 Autenticando en Smart Advocate API...')
-  
+
   if (!SA_USERNAME || !SA_PASSWORD) {
-    throw new Error('SA_USERNAME y SA_PASSWORD son requeridos en el archivo .env')
+    throw new Error(
+      'SA_USERNAME y SA_PASSWORD son requeridos en el archivo .env'
+    )
   }
 
   try {
@@ -34,25 +37,30 @@ async function authenticateSmartAdvocate() {
       `${SA_API_BASE_URL}/Users/authenticate`,
       {
         Username: SA_USERNAME,
-        Password: SA_PASSWORD
+        Password: SA_PASSWORD,
       },
       {
         headers: {
-          'Content-Type': 'application/json'
-        }
+          'Content-Type': 'application/json',
+        },
       }
     )
 
     if (response.data && response.data.token) {
       smartAdvocateToken = response.data.token
       console.log(`   ✅ Autenticación exitosa`)
-      console.log(`   👤 Usuario: ${response.data.username} (ID: ${response.data.userID})`)
+      console.log(
+        `   👤 Usuario: ${response.data.username} (ID: ${response.data.userID})`
+      )
       return true
     } else {
       throw new Error('Token no recibido en la respuesta')
     }
   } catch (error) {
-    console.error('   ❌ Error de autenticación:', error.response?.data || error.message)
+    console.error(
+      '   ❌ Error de autenticación:',
+      error.response?.data || error.message
+    )
     throw new Error('No se pudo autenticar en Smart Advocate API')
   }
 }
@@ -62,18 +70,21 @@ async function authenticateSmartAdvocate() {
  */
 async function getCaseNumbersFromAzureStorage() {
   console.log('\n📦 Conectando a Azure Storage...')
-  
+
   try {
     const blobServiceClient = BlobServiceClient.fromConnectionString(
       AZURE_STORAGE_CONNECTION_STRING
     )
-    const containerClient = blobServiceClient.getContainerClient(AZURE_CONTAINER_NAME)
+    const containerClient =
+      blobServiceClient.getContainerClient(AZURE_CONTAINER_NAME)
 
     console.log('📂 Listando casos en el contenedor...')
-    
+
     const caseNumbers = new Set()
-    
-    for await (const blob of containerClient.listBlobsFlat({ includeMetadata: true })) {
+
+    for await (const blob of containerClient.listBlobsFlat({
+      includeMetadata: true,
+    })) {
       const pathParts = blob.name.split('/')
       if (pathParts.length > 1) {
         const caseNumber = pathParts[0]
@@ -86,11 +97,43 @@ async function getCaseNumbersFromAzureStorage() {
     const cases = Array.from(caseNumbers).sort()
     console.log(`✅ Encontrados ${cases.length} casos en Azure Storage:`)
     console.log(`   ${cases.join(', ')}`)
-    
+
     return cases
   } catch (error) {
     console.error('❌ Error conectando a Azure Storage:', error.message)
     throw error
+  }
+}
+
+/**
+ * 🆕 Obtiene la información básica del caso (Nombre, Estado, etc.)
+ */
+async function getCaseInfo(caseNumber) {
+  try {
+    // Asumiendo que SA_API_BASE_URL termina antes de /case/...
+    const url = `${SA_API_BASE_URL}/case/CaseInfo?Casenumber=${caseNumber}`
+
+    if (!smartAdvocateToken) {
+      throw new Error('Token no disponible')
+    }
+
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${smartAdvocateToken}`,
+        'Content-Type': 'application/json',
+      },
+    })
+
+    // La API retorna un Array según tu ejemplo
+    if (response.data && response.data.length > 0) {
+      return response.data[0]
+    }
+    return null
+  } catch (error) {
+    console.warn(
+      `   ⚠️  No se pudo obtener información del caso ${caseNumber}: ${error.message}`
+    )
+    return null
   }
 }
 
@@ -100,18 +143,20 @@ async function getCaseNumbersFromAzureStorage() {
 async function getNotesByCaseNumber(caseNumber) {
   try {
     const url = `${SA_API_BASE_URL}/case/notes/byCaseNumber?CaseNumber=${caseNumber}`
-    
+
     if (!smartAdvocateToken) {
-      throw new Error('Token de Smart Advocate no disponible. Autenticación requerida.')
+      throw new Error(
+        'Token de Smart Advocate no disponible. Autenticación requerida.'
+      )
     }
 
     const response = await axios.get(url, {
       headers: {
-        'Authorization': `Bearer ${smartAdvocateToken}`,
-        'Content-Type': 'application/json'
-      }
+        Authorization: `Bearer ${smartAdvocateToken}`,
+        'Content-Type': 'application/json',
+      },
     })
-    
+
     return response.data // Array de notas
   } catch (error) {
     if (error.response?.status === 404) {
@@ -125,9 +170,9 @@ async function getNotesByCaseNumber(caseNumber) {
       try {
         const response = await axios.get(url, {
           headers: {
-            'Authorization': `Bearer ${smartAdvocateToken}`,
-            'Content-Type': 'application/json'
-          }
+            Authorization: `Bearer ${smartAdvocateToken}`,
+            'Content-Type': 'application/json',
+          },
         })
         return response.data
       } catch (retryError) {
@@ -135,7 +180,10 @@ async function getNotesByCaseNumber(caseNumber) {
         return []
       }
     }
-    console.error(`   ❌ Error consultando notas del caso ${caseNumber}:`, error.message)
+    console.error(
+      `   ❌ Error consultando notas del caso ${caseNumber}:`,
+      error.message
+    )
     return []
   }
 }
@@ -145,23 +193,18 @@ async function getNotesByCaseNumber(caseNumber) {
  */
 function cleanNoteText(text) {
   if (!text) return ''
-  
+
   return text
-    // Reemplazar <br> con saltos de línea
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<br>/gi, '\n')
-    // Eliminar otros tags HTML
     .replace(/<[^>]+>/g, '')
-    // Decodificar HTML entities comunes
     .replace(/&nbsp;/g, ' ')
     .replace(/&#39;/g, "'")
     .replace(/&quot;/g, '"')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&')
-    // Limpiar espacios múltiples
     .replace(/\s+/g, ' ')
-    // Limpiar espacios al inicio y final
     .trim()
 }
 
@@ -170,19 +213,19 @@ function cleanNoteText(text) {
  */
 function formatDateTime(isoDate) {
   if (!isoDate) return 'N/A'
-  
+
   try {
     const date = new Date(isoDate)
     const dateStr = date.toLocaleDateString('en-US', {
       year: 'numeric',
       month: '2-digit',
-      day: '2-digit'
+      day: '2-digit',
     })
     const timeStr = date.toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-      hour12: false
+      hour12: false,
     })
     return `${dateStr} ${timeStr}`
   } catch (error) {
@@ -200,23 +243,22 @@ function generateNoteFileName(note, caseNumber) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   const dateStr = `${year}${month}${day}`
-  
+
   return `${caseNumber}_${dateStr}_${note.noteID}.txt`
 }
 
 /**
- * Genera el contenido de un archivo de nota individual
+ * ✏️ Genera el contenido de un archivo de nota individual
+ * MODIFICADO: Ahora acepta caseName y ajusta el formato
  */
-function generateNoteFileContent(note, caseNumber) {
-  // const separator = '='.repeat(80)
-  const separator = ''
-  
-  return `CASE NOTE ${caseNumber}
-${separator}
+function generateNoteFileContent(note, caseNumber, caseName) {
+  // Manejo de nulos por seguridad
+  const safeCaseName = caseName || 'Unknown Case Name'
 
+  return `CASE NUMBER: ${caseNumber}
+CASE NAME: ${safeCaseName}
 NOTE ID: ${note.noteID}
-CASE: ${caseNumber}
-${separator}
+
 METADATA:
   • Date: ${formatDateTime(note.noteDate)}
   • Created: ${formatDateTime(note.createdDate)}
@@ -225,13 +267,15 @@ METADATA:
   • Note Type: ${note.noteTypeName || 'N/A'}
   • Priority: ${note.priority || 'Normal'}
   • Subject: ${note.subject || 'No subject'}
-${note.modifiedDate ? `  • Last modified: ${formatDateTime(note.modifiedDate)}` : ''}
-${separator}
+${
+  note.modifiedDate
+    ? `  • Last modified: ${formatDateTime(note.modifiedDate)}`
+    : ''
+}
+
 NOTE TEXT:
 
 ${cleanNoteText(note.noteText)}
-
-${separator}
 
 File generated: ${new Date().toISOString()}
 `
@@ -246,7 +290,7 @@ function loadNotesCache() {
       console.log('   ℹ️  No se encontró cache de notas, creando nuevo cache')
       return {}
     }
-    
+
     const data = JSON.parse(fs.readFileSync(NOTES_CACHE_FILE, 'utf-8'))
     return data
   } catch (error) {
@@ -268,43 +312,36 @@ function saveNotesCache(cache) {
 
 /**
  * Verifica si hay notas nuevas o modificadas
- * Retorna objeto con arrays de notas a crear/actualizar
  */
 function identifyNotesToSync(notes, cachedNotes) {
   const toSync = {
     new: [],
     modified: [],
-    unchanged: []
+    unchanged: [],
   }
-  
+
   if (!cachedNotes || Object.keys(cachedNotes).length === 0) {
-    // No hay cache, todas son nuevas
     toSync.new = notes
     return toSync
   }
-  
-  // Verificar cada nota
+
   for (const note of notes) {
     const cachedNote = cachedNotes[note.noteID]
-    
+
     if (!cachedNote) {
-      // Nota nueva
       toSync.new.push(note)
     } else {
-      // Verificar si fue modificada
       const currentModified = note.modifiedDate || note.createdDate
       const cachedModified = cachedNote.modifiedDate || cachedNote.createdDate
-      
+
       if (currentModified !== cachedModified) {
-        // Nota modificada
         toSync.modified.push(note)
       } else {
-        // Sin cambios
         toSync.unchanged.push(note)
       }
     }
   }
-  
+
   return toSync
 }
 
@@ -316,17 +353,18 @@ async function uploadNoteToAzureStorage(caseNumber, fileName, content) {
     const blobServiceClient = BlobServiceClient.fromConnectionString(
       AZURE_STORAGE_CONNECTION_STRING
     )
-    const containerClient = blobServiceClient.getContainerClient(AZURE_CONTAINER_NAME)
-    
+    const containerClient =
+      blobServiceClient.getContainerClient(AZURE_CONTAINER_NAME)
+
     const blobName = `${caseNumber}/notes/${fileName}`
     const blockBlobClient = containerClient.getBlockBlobClient(blobName)
-    
+
     await blockBlobClient.upload(content, content.length, {
       blobHTTPHeaders: {
-        blobContentType: 'text/plain; charset=utf-8'
-      }
+        blobContentType: 'text/plain; charset=utf-8',
+      },
     })
-    
+
     return { success: true, blobName }
   } catch (error) {
     console.error(`   ❌ Error subiendo archivo ${fileName}:`, error.message)
@@ -339,11 +377,11 @@ async function uploadNoteToAzureStorage(caseNumber, fileName, content) {
  */
 function createNotesIndex(notes) {
   const index = {}
-  notes.forEach(note => {
+  notes.forEach((note) => {
     index[note.noteID] = {
       createdDate: note.createdDate,
       modifiedDate: note.modifiedDate,
-      noteDate: note.noteDate
+      noteDate: note.noteDate,
     }
   })
   return index
@@ -363,7 +401,7 @@ async function syncNotes() {
     casesUpdated: 0,
     casesSkipped: 0,
     totalNotes: 0,
-    errors: 0
+    errors: 0,
   }
 
   try {
@@ -378,7 +416,7 @@ async function syncNotes() {
     // PASO 2: Obtener lista de casos desde Azure Storage
     const caseNumbers = await getCaseNumbersFromAzureStorage()
     stats.totalCases = caseNumbers.length
-    
+
     if (caseNumbers.length === 0) {
       console.log('\n⚠️  No se encontraron casos en Azure Storage')
       return
@@ -386,53 +424,71 @@ async function syncNotes() {
 
     // PASO 3: Procesar cada caso
     console.log('\n🔍 Procesando notas de cada caso...\n')
-    
+
     for (let i = 0; i < caseNumbers.length; i++) {
       const caseNumber = caseNumbers[i]
       const progress = `[${i + 1}/${caseNumbers.length}]`
-      
+
       console.log(`${progress} Procesando caso ${caseNumber}...`)
-      
+
       try {
+        // 🆕 PASO 3.1: Obtener Info del Caso (Nombre)
+        const caseInfo = await getCaseInfo(caseNumber)
+        const caseName = caseInfo ? caseInfo.caseName : 'N/A'
+
         // Obtener notas del caso
         const notes = await getNotesByCaseNumber(caseNumber)
         stats.totalNotes += notes.length
-        
+
         if (notes.length === 0) {
           console.log(`   ℹ️  Sin notas disponibles`)
           stats.casesSkipped++
-          
-          // Delay para no saturar la API
+
           if (i < caseNumbers.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 300))
+            await new Promise((resolve) => setTimeout(resolve, 300))
           }
           continue
         }
-        
-        console.log(`   📋 ${notes.length} notas encontradas`)
+
+        console.log(
+          `   📋 ${notes.length} notas encontradas para "${caseName}"`
+        )
         stats.casesWithNotes++
-        
+
         // Identificar notas a sincronizar
         const cachedCaseNotes = notesCache[caseNumber]
         const toSync = identifyNotesToSync(notes, cachedCaseNotes)
-        
+
         const totalToSync = toSync.new.length + toSync.modified.length
-        
+
         if (totalToSync === 0) {
-          console.log(`   ⏭️  Sin cambios desde última sincronización (${toSync.unchanged.length} notas sin cambios)`)
+          console.log(
+            `   ⏭️  Sin cambios desde última sincronización (${toSync.unchanged.length} notas sin cambios)`
+          )
           stats.casesSkipped++
         } else {
-          console.log(`   🔄 A sincronizar: ${toSync.new.length} nuevas, ${toSync.modified.length} modificadas`)
-          
+          console.log(
+            `   🔄 A sincronizar: ${toSync.new.length} nuevas, ${toSync.modified.length} modificadas`
+          )
+
           let uploaded = 0
           let failed = 0
-          
+
           // Subir notas nuevas
           for (const note of toSync.new) {
             const fileName = generateNoteFileName(note, caseNumber)
-            const fileContent = generateNoteFileContent(note, caseNumber)
-            const result = await uploadNoteToAzureStorage(caseNumber, fileName, fileContent)
-            
+            // ✏️ PASAMOS EL caseName AQUÍ
+            const fileContent = generateNoteFileContent(
+              note,
+              caseNumber,
+              caseName
+            )
+            const result = await uploadNoteToAzureStorage(
+              caseNumber,
+              fileName,
+              fileContent
+            )
+
             if (result.success) {
               uploaded++
               console.log(`   ✅ Nuevo: ${fileName}`)
@@ -440,13 +496,22 @@ async function syncNotes() {
               failed++
             }
           }
-          
+
           // Subir notas modificadas
           for (const note of toSync.modified) {
             const fileName = generateNoteFileName(note, caseNumber)
-            const fileContent = generateNoteFileContent(note, caseNumber)
-            const result = await uploadNoteToAzureStorage(caseNumber, fileName, fileContent)
-            
+            // ✏️ PASAMOS EL caseName AQUÍ
+            const fileContent = generateNoteFileContent(
+              note,
+              caseNumber,
+              caseName
+            )
+            const result = await uploadNoteToAzureStorage(
+              caseNumber,
+              fileName,
+              fileContent
+            )
+
             if (result.success) {
               uploaded++
               console.log(`   🔄 Actualizado: ${fileName}`)
@@ -454,27 +519,31 @@ async function syncNotes() {
               failed++
             }
           }
-          
+
           if (uploaded > 0) {
             // Actualizar cache
             notesCache[caseNumber] = createNotesIndex(notes)
             stats.casesUpdated++
-            console.log(`   ✨ ${uploaded} archivos sincronizados correctamente`)
+            console.log(
+              `   ✨ ${uploaded} archivos sincronizados correctamente`
+            )
           }
-          
+
           if (failed > 0) {
             console.log(`   ⚠️  ${failed} archivos fallaron`)
             stats.errors += failed
           }
         }
-        
+
         // Delay para no saturar la API
         if (i < caseNumbers.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 300))
+          await new Promise((resolve) => setTimeout(resolve, 300))
         }
-        
       } catch (error) {
-        console.error(`   ❌ Error procesando caso ${caseNumber}:`, error.message)
+        console.error(
+          `   ❌ Error procesando caso ${caseNumber}:`,
+          error.message
+        )
         stats.errors++
       }
     }
@@ -494,15 +563,16 @@ async function syncNotes() {
     console.log(`   • Casos sin cambios: ${stats.casesSkipped}`)
     console.log(`   • Total de notas: ${stats.totalNotes}`)
     console.log(`   • Errores: ${stats.errors}`)
-    
-    console.log(`\n⏰ Finalizado: ${new Date().toLocaleString()}`)
-    
-    if (stats.casesUpdated > 0) {
-      console.log('\n✨ Los archivos actualizados serán indexados automáticamente por Azure AI Search')
-    }
-    
-    console.log()
 
+    console.log(`\n⏰ Finalizado: ${new Date().toLocaleString()}`)
+
+    if (stats.casesUpdated > 0) {
+      console.log(
+        '\n✨ Los archivos actualizados serán indexados automáticamente por Azure AI Search'
+      )
+    }
+
+    console.log()
   } catch (error) {
     console.error('\n❌ ERROR DURANTE LA SINCRONIZACIÓN:')
     console.error(error)

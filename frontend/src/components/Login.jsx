@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import API_URL from '../apiConfig'
 import ThemeToggle from './ThemeToggle'
 import { FaSignInAlt } from 'react-icons/fa'
 import { FaMicrosoft } from 'react-icons/fa'
@@ -17,7 +18,7 @@ function Login({ onLogin, theme, toggleTheme }) {
     setLoading(true)
 
     try {
-      const response = await fetch('/api/login', {
+      const response = await fetch(`${API_URL}/api/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -52,7 +53,7 @@ function Login({ onLogin, theme, toggleTheme }) {
          return
       }
       const idToken = await result.user.getIdToken()
-      const response = await fetch('/api/auth/microsoft', {
+      const response = await fetch(`${API_URL}/api/auth/microsoft`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idToken }),

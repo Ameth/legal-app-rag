@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { pdfjs } from 'react-pdf'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
+import API_URL from '../apiConfig' // <--- IMPORTANTE: Importamos la configuración
 
 // Configurar worker de PDF.js
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`
@@ -17,7 +18,6 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
     }
   }, [document])
 
-  // 🚀 OPTIMIZADO: Usa blobPath directamente
   const loadDocument = async () => {
     setIsLoading(true)
     setError(null)
@@ -26,44 +26,49 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
       const tokenParts = token.split('.')
       const payload = JSON.parse(atob(tokenParts[1]))
       const sessionId = payload.sessionId
-      const isDev = import.meta.env.DEV
-      const baseUrl = isDev ? 'http://localhost:3001' : ''
+
+      // ELIMINADO: La lógica manual de localhost
+      // const isDev = import.meta.env.DEV
+      // const baseUrl = isDev ? 'http://localhost:3001' : ''
 
       // 🚀 OPTIMIZACIÓN: Si ya viene blobPath, hacer fetch directo
       if (document.blobPath) {
         console.log('⚡ Using blobPath from index:', document.blobPath)
-        
-        const metadataResponse = await fetch('/api/documents/get-url', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            filename: document.title,
-            blobPath: document.blobPath,
-          }),
-        })
+
+        // USAMOS API_URL AQUÍ
+        const metadataResponse = await fetch(
+          `${API_URL}/api/documents/get-url`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              filename: document.title,
+              blobPath: document.blobPath,
+            }),
+          }
+        )
 
         const metadata = await metadataResponse.json()
 
         if (!metadataResponse.ok) {
           console.error('❌ Error loading document:', metadata.error)
-          
-          // Verificar si es un error de "no encontrado"
           if (metadata.error && metadata.error.includes('not found')) {
-            throw new Error(`Document not found: ${document.title}\n\nThe file may have been moved or deleted from blob storage.`)
+            throw new Error(
+              `Document not found: ${document.title}\n\nThe file may have been moved or deleted from blob storage.`
+            )
           }
-          
           throw new Error(metadata.error || 'Could not load document')
         }
 
-        // Verificar que tenemos una URL válida
         if (!metadata.url) {
           throw new Error('No valid URL returned from server')
         }
 
-        const proxyUrl = `${baseUrl}/api/proxy/${sessionId}/${encodeURIComponent(
+        // USAMOS API_URL PARA EL PROXY TAMBIÉN
+        const proxyUrl = `${API_URL}/api/proxy/${sessionId}/${encodeURIComponent(
           metadata.filename
         )}`
 
@@ -82,8 +87,9 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
 
       // 🐢 FALLBACK: Sin blobPath (casos raros)
       console.log('🐢 No blobPath, searching by filename...')
-      
-      const metadataResponse = await fetch('/api/documents/get-url', {
+
+      // USAMOS API_URL AQUÍ
+      const metadataResponse = await fetch(`${API_URL}/api/documents/get-url`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -98,11 +104,11 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
 
       if (!metadataResponse.ok) {
         console.error('❌ Error loading document:', metadata.error)
-        
         if (metadata.error && metadata.error.includes('not found')) {
-          throw new Error(`Document not found: ${document.title}\n\nThe file may have been moved or deleted from blob storage.`)
+          throw new Error(
+            `Document not found: ${document.title}\n\nThe file may have been moved or deleted from blob storage.`
+          )
         }
-        
         throw new Error(metadata.error || 'Could not load document')
       }
 
@@ -110,7 +116,8 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
         throw new Error('No valid URL returned from server')
       }
 
-      const proxyUrl = `${baseUrl}/api/proxy/${sessionId}/${encodeURIComponent(
+      // USAMOS API_URL AQUÍ
+      const proxyUrl = `${API_URL}/api/proxy/${sessionId}/${encodeURIComponent(
         metadata.filename
       )}`
 
@@ -260,6 +267,7 @@ export default function DocumentPreviewPanel({ document, onClose, token }) {
             href={content.url}
             download={document.title}
             target='_blank'
+            rel='noreferrer'
             className='flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-center font-medium text-sm'
           >
             📥 Download

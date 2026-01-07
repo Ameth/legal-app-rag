@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
+import API_URL from '../apiConfig'
 import ReactMarkdown from 'react-markdown'
 import ThemeToggle from './ThemeToggle'
 import { IoIosLogOut } from 'react-icons/io'
@@ -71,7 +72,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
 
     try {
       const token = localStorage.getItem('token')
-      const response = await fetch('/api/chat', {
+      const response = await fetch(`${API_URL}/api/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -96,7 +97,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
 
             // Solo para citations sin blobPath, hacer fetch
             try {
-              const urlResponse = await fetch('/api/documents/get-url', {
+              const urlResponse = await fetch(`${API_URL}/api/documents/get-url`, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -160,7 +161,7 @@ function Chat({ user, onLogout, theme, toggleTheme }) {
     try {
       const token = localStorage.getItem('token')
 
-      await fetch('/api/chat/clear', {
+      await fetch(`${API_URL}/api/chat/clear`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
