@@ -31,14 +31,14 @@ jobs:
           api_location: ""
           output_location: "dist"
         env:
-          VITE_API_URL: "https://acts-law-ai-brdbgqhxfqcghzg9.eastus-01.azurewebsites.net"
-          VITE_FIREBASE_API_KEY: "AIzaSyBN-rjvp5szo5Pf-XjtOl-wG16pVprgQH4"
-          VITE_FIREBASE_AUTH_DOMAIN: "legal-app-rag.firebaseapp.com"
-          VITE_FIREBASE_PROJECT_ID: "legal-app-rag"
-          VITE_FIREBASE_STORAGE_BUCKET: "legal-app-rag.firebasestorage.app"
-          VITE_FIREBASE_MESSAGING_SENDER_ID: "1082768723990"
-          VITE_FIREBASE_APP_ID: "1:1082768723990:web:c435cf534bf404cbc1e537"
-          VITE_FIREBASE_MEASUREMENT_ID: "G-8YNR8ZBW9H"
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.VITE_FIREBASE_MEASUREMENT_ID }}
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
@@ -51,3 +51,4 @@ jobs:
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_GENTLE_SMOKE_0AF19EB1E }}
           action: "close"
+
