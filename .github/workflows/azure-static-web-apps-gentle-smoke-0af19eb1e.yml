@@ -19,19 +19,26 @@ jobs:
         with:
           submodules: true
           lfs: false
+
       - name: Build And Deploy
         id: builddeploy
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_GENTLE_SMOKE_0AF19EB1E }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }} # Used for Github integrations (i.e. PR comments)
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
-          ###### Repository/Build Configurations - These values can be configured to match your app requirements. ######
-          # For more information regarding Static Web App workflow configurations, please visit: https://aka.ms/swaworkflowconfig
-          app_location: "./frontend" # App source code path
-          api_location: "" # Api source code path - optional
-          output_location: "dist" # Built app content directory - optional
-          ###### End of Repository/Build Configurations ######
+          app_location: "./frontend"
+          api_location: ""
+          output_location: "dist"
+        env:
+          VITE_API_URL: "https://acts-law-ai-brdbgqhxfqcghzg9.eastus-01.azurewebsites.net"
+          VITE_FIREBASE_API_KEY: "AIzaSyBN-rjvp5szo5Pf-XjtOl-wG16pVprgQH4"
+          VITE_FIREBASE_AUTH_DOMAIN: "legal-app-rag.firebaseapp.com"
+          VITE_FIREBASE_PROJECT_ID: "legal-app-rag"
+          VITE_FIREBASE_STORAGE_BUCKET: "legal-app-rag.firebasestorage.app"
+          VITE_FIREBASE_MESSAGING_SENDER_ID: "1082768723990"
+          VITE_FIREBASE_APP_ID: "1:1082768723990:web:c435cf534bf404cbc1e537"
+          VITE_FIREBASE_MEASUREMENT_ID: "G-8YNR8ZBW9H"
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
